@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { spawn, ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { Container, SelectList, Text, type SelectItem, DynamicBorder } from "@mariozechner/pi-tui";
 
 interface SubAgent {
   id: string;
@@ -130,6 +131,20 @@ function updateSubAgentWidget(ctx: ExtensionContext) {
   ctx.ui.setStatus("subagent", getStatusText());
 }
 
+async function waitForSubAgent(id: string, timeoutMs = 120000): Promise<boolean> {
+  const agent = activeAgents.get(id);
+  if (!agent) return false;
+  
+  const startTime = Date.now();
+  while (agent.status !== "completed" && agent.status !== "error") {
+    if (Date.now() - startTime > timeoutMs) {
+      return false;
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+  return agent.status === "completed";
+}
+
 function getAgentReport(id: string): string {
   const agent = activeAgents.get(id);
   if (!agent) return `Agent ${id} not found`;
@@ -190,6 +205,125 @@ ${transcript.join("\n\n") || "(no activity yet)"}
 `;
 }
 
+async function handleInteract(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
+  // Get active agents only
+  const active = Array.from(activeAgents.values()).filter(
+    a => a.status === "running" || a.status === "starting"
+  );
+  
+  if (active.length === 0) {
+    ctx.ui.notify("No active sub-agents", "info");
+    return;
+  }
+  
+  // Create agent selection items
+  const agentItems: SelectItem[] = active.map((agent, index) => ({
+    value: agent.id,
+    label: `${index + 1}) ${agent.id} — ${agent.status} (${Math.floor((Date.now() - agent.startTime) / 1000)}s)`,
+  }));
+  
+  // Show agent selection dialog
+  const selectedAgentId = await new Promise<string | null>((resolve) => {
+    const container = new Container();
+    container.addChild(new Text("Select sub-agent:", 0, 1));
+    
+    const selectList = new SelectList(agentItems, Math.min(agentItems.length, 10), {
+      selectedPrefix: (t) => ctx.theme.fg("accent", t),
+      selectedText: (t) => ctx.theme.fg("accent", t),
+    });
+    
+    selectList.onSelect = (item) => resolve(item.value as string);
+    selectList.onCancel = () => resolve(null);
+    
+    container.addChild(selectList);
+    container.addChild(new Text(ctx.theme.fg("dim", "↑↓ navigate • enter select • esc cancel"), 1, 0));
+    
+    const border = new DynamicBorder(container, { title: "Sub-Agents" });
+    const handle = ctx.ui.custom(border);
+    
+    handle.handleInput = (data) => {
+      selectList.handleInput(data);
+      handle.requestRender();
+    };
+    
+    selectList.onSelect = (item) => {
+      handle.close();
+      resolve(item.value as string);
+    };
+    
+    selectList.onCancel = () => {
+      handle.close();
+      resolve(null);
+    };
+  });
+  
+  if (!selectedAgentId) return;
+  
+  // Show action selection dialog
+  const actionItems: SelectItem[] = [
+    { value: "report", label: "report — Get transcript" },
+    { value: "kill", label: "kill — Stop the agent" },
+    { value: "wait", label: "wait — Wait for completion" },
+  ];
+  
+  const selectedAction = await new Promise<string | null>((resolve) => {
+    const container = new Container();
+    container.addChild(new Text(`Agent: ${selectedAgentId}`, 0, 1));
+    container.addChild(new Text("Select action:", 0, 1));
+    
+    const selectList = new SelectList(actionItems, actionItems.length, {
+      selectedPrefix: (t) => ctx.theme.fg("accent", t),
+      selectedText: (t) => ctx.theme.fg("accent", t),
+    });
+    
+    container.addChild(selectList);
+    container.addChild(new Text(ctx.theme.fg("dim", "↑↓ navigate • enter select • esc cancel"), 1, 0));
+    
+    const border = new DynamicBorder(container, { title: "Action" });
+    const handle = ctx.ui.custom(border);
+    
+    handle.handleInput = (data) => {
+      selectList.handleInput(data);
+      handle.requestRender();
+    };
+    
+    selectList.onSelect = (item) => {
+      handle.close();
+      resolve(item.value as string);
+    };
+    
+    selectList.onCancel = () => {
+      handle.close();
+      resolve(null);
+    };
+  });
+  
+  if (!selectedAction) return;
+  
+  // Execute selected action
+  switch (selectedAction) {
+    case "report":
+      const report = getAgentReport(selectedAgentId);
+      pi.sendMessage({
+        customType: "subagent-report",
+        content: report,
+        display: true,
+      });
+      ctx.ui.notify(`Report for ${selectedAgentId} added to conversation`, "info");
+      break;
+    case "kill":
+      if (killSubAgent(selectedAgentId, ctx)) {
+        ctx.ui.notify(`Killed sub-agent ${selectedAgentId}`, "info");
+      }
+      break;
+    case "wait":
+      ctx.ui.notify(`Waiting for ${selectedAgentId}...`, "info");
+      await waitForSubAgent(selectedAgentId);
+      ctx.ui.notify(`${selectedAgentId} completed`, "info");
+      break;
+  }
+}
+
 function killSubAgent(id: string, ctx: ExtensionContext): boolean {
   const agent = activeAgents.get(id);
   if (!agent) return false;
@@ -207,6 +341,7 @@ export default function (pi: ExtensionAPI) {
     getArgumentCompletions: (prefix: string) => {
       const items = [
         { value: "spawn", label: "spawn <task> — Spawn a new sub-agent" },
+        { value: "interact", label: "interact — Interactively manage sub-agents" },
         { value: "report", label: "report <id> — Get transcript of agent activity" },
         { value: "list", label: "list — List all sub-agents" },
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
@@ -280,8 +415,12 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("Killed all sub-agents", "info");
           break;
 
+        case "interact":
+          await handleInteract(pi, ctx);
+          break;
+
         default:
-          ctx.ui.notify("Usage: /subagent {spawn|report|list|kill|killall} [args]", "error");
+          ctx.ui.notify("Usage: /subagent {spawn|interact|report|list|kill|killall} [args]", "error");
       }
     },
   });
