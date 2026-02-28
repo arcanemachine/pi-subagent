@@ -17,6 +17,7 @@ interface SubAgent {
 
 const activeAgents = new Map<string, SubAgent>();
 let currentCtx: ExtensionContext | null = null;
+let watchedAgentIds: Set<string> = new Set();
 
 function spawnSubAgent(task: string): SubAgent {
   const id = randomUUID().slice(0, 8);
@@ -72,6 +73,10 @@ function spawnSubAgent(task: string): SubAgent {
           agent.currentTool = undefined;
           // Force immediate widget update on completion
           updateSubAgentStatus();
+          // Update watch widget if being watched
+          if (watchedAgentIds.has(id)) {
+            updateWatchWidget();
+          }
         }
       } catch (e) {
         // Ignore parse errors
@@ -80,6 +85,11 @@ function spawnSubAgent(task: string): SubAgent {
     
     // Update widget to show current activity
     updateSubAgentStatus();
+    
+    // Update watch widget if this agent is being watched
+    if (watchedAgentIds.has(id)) {
+      updateWatchWidget();
+    }
   });
 
   // Handle stderr
@@ -94,6 +104,10 @@ function spawnSubAgent(task: string): SubAgent {
       agent.endTime = Date.now();
     }
     updateSubAgentStatus();
+    // Update watch widget if being watched
+    if (watchedAgentIds.has(id)) {
+      updateWatchWidget();
+    }
   });
 
   // Send the initial prompt
@@ -123,6 +137,45 @@ function updateSubAgentStatus() {
   } else {
     currentCtx.ui.setStatus("subagent", getStatusText());
   }
+}
+
+function updateWatchWidget() {
+  if (!currentCtx || watchedAgentIds.size === 0) {
+    currentCtx?.ui.setWidget("subagent-watch", undefined);
+    return;
+  }
+
+  const widgetLines: string[] = [
+    `👁 Watching ${watchedAgentIds.size} Sub-Agent${watchedAgentIds.size > 1 ? 's' : ''}`,
+    "────────────────────────────────────────",
+  ];
+
+  for (const id of watchedAgentIds) {
+    const agent = activeAgents.get(id);
+    if (!agent) continue;
+
+    const duration = agent.endTime 
+      ? Math.floor((agent.endTime - agent.startTime) / 1000)
+      : Math.floor((Date.now() - agent.startTime) / 1000);
+
+    // Header line with status
+    const statusIcon = agent.status === "running" ? "⏳" : 
+                       agent.status === "completed" ? "✓" : "✗";
+    widgetLines.push(`${statusIcon} ${id} (${agent.status}) | ${agent.output.length} events | ${duration}s`);
+    
+    // Task (truncated)
+    widgetLines.push(`Task: ${agent.task.slice(0, 50)}${agent.task.length > 50 ? '...' : ''}`);
+    
+    // Current tool if running
+    if (agent.status === "running" && agent.currentTool) {
+      widgetLines.push(`🔧 ${agent.currentTool}`);
+    }
+
+    // Separator between agents
+    widgetLines.push("────────────────────────────────────────");
+  }
+
+  currentCtx.ui.setWidget("subagent-watch", widgetLines);
 }
 
 async function waitForSubAgent(id: string, timeoutMs = 120000): Promise<boolean> {
@@ -221,6 +274,10 @@ export default function (pi: ExtensionAPI) {
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
         { value: "killall", label: "killall — Kill all sub-agents" },
         { value: "prune", label: "prune — Remove completed sub-agents from list" },
+        { value: "show", label: "show <id> — Watch sub-agent in widget" },
+        { value: "hide", label: "hide <id> — Stop watching sub-agent" },
+        { value: "show-all", label: "show-all — Watch all running sub-agents" },
+        { value: "hide-all", label: "hide-all — Stop watching all sub-agents" },
       ];
       return items.filter((i) => i.value.startsWith(prefix));
     },
@@ -303,8 +360,46 @@ export default function (pi: ExtensionAPI) {
           break;
         }
 
+        case "show":
+          if (!subArgs) {
+            ctx.ui.notify("Usage: /subagent show <id>", "error");
+            return;
+          }
+          if (!activeAgents.has(subArgs)) {
+            ctx.ui.notify(`Sub-agent ${subArgs} not found`, "error");
+            return;
+          }
+          watchedAgentIds.add(subArgs);
+          updateWatchWidget();
+          ctx.ui.notify(`Now watching sub-agent ${subArgs}`, "info");
+          break;
+
+        case "hide":
+          if (!subArgs) {
+            ctx.ui.notify("Usage: /subagent hide <id>", "error");
+            return;
+          }
+          watchedAgentIds.delete(subArgs);
+          updateWatchWidget();
+          ctx.ui.notify(`Stopped watching sub-agent ${subArgs}`, "info");
+          break;
+
+        case "show-all":
+          for (const [id] of activeAgents) {
+            watchedAgentIds.add(id);
+          }
+          updateWatchWidget();
+          ctx.ui.notify(`Watching all ${watchedAgentIds.size} sub-agents`, "info");
+          break;
+
+        case "hide-all":
+          watchedAgentIds.clear();
+          updateWatchWidget();
+          ctx.ui.notify("Stopped watching all sub-agents", "info");
+          break;
+
         default:
-          ctx.ui.notify("Usage: /subagent {spawn|report|list|kill|killall|prune} [args]", "error");
+          ctx.ui.notify("Usage: /subagent {spawn|report|list|kill|killall|prune|show|hide|show-all|hide-all} [args]", "error");
       }
     },
   });
@@ -478,6 +573,9 @@ export default function (pi: ExtensionAPI) {
       }
       activeAgents.clear();
       updateSubAgentStatus();
+      // Clear watch list and widget
+      watchedAgentIds.clear();
+      updateWatchWidget();
     }
   });
 }
