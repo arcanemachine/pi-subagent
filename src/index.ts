@@ -350,6 +350,98 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // Register a combined tool that spawns and waits
+  pi.registerTool({
+    name: "run_subagent_task",
+    label: "Run Sub-Agent Task",
+    description: "Spawn a sub-agent, wait for it to complete, and return the results. " +
+      "This is a convenience tool that combines spawn_subagent and wait_for_subagent. " +
+      "Use for tasks that should run in isolation and you need the result from.",
+    parameters: {
+      type: "object",
+      properties: {
+        task: {
+          type: "string",
+          description: "The task to assign to the sub-agent",
+        },
+        timeout_ms: {
+          type: "number",
+          description: "Maximum time to wait in milliseconds",
+          default: 120000,
+        },
+      },
+      required: ["task"],
+    } as const,
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      // Spawn the sub-agent
+      const agent = spawnSubAgent(params.task, ctx);
+      
+      // Stream progress updates
+      onUpdate?.({
+        content: [{
+          type: "text",
+          text: `Spawned sub-agent ${agent.id}, waiting for completion...`,
+        }],
+      });
+      
+      // Wait for completion
+      const timeout = params.timeout_ms || 120000;
+      const result = await waitForSubAgent(agent.id, timeout);
+      
+      if (!result) {
+        killSubAgent(agent.id);
+        return {
+          content: [{
+            type: "text",
+            text: `Sub-agent ${agent.id} timed out after ${timeout}ms`,
+          }],
+          isError: true,
+          details: { agentId: agent.id, timeout },
+        };
+      }
+      
+      // Extract final output
+      let finalOutput = "";
+      for (const line of result.output) {
+        try {
+          const event = JSON.parse(line);
+          if (event.type === "agent_end" && event.messages) {
+            const assistantMsgs = event.messages
+              .filter((m: any) => m.role === "assistant")
+              .map((m: any) => {
+                if (typeof m.content === "string") return m.content;
+                if (Array.isArray(m.content)) {
+                  return m.content
+                    .filter((c: any) => c.type === "text")
+                    .map((c: any) => c.text)
+                    .join("\n");
+                }
+                return "";
+              });
+            finalOutput = assistantMsgs.join("\n\n");
+          }
+        } catch {}
+      }
+      
+      // Clean up
+      activeAgents.delete(agent.id);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `Sub-agent completed with status: ${result.status}\n\n` +
+            `Task: ${result.task}\n` +
+            `Duration: ${result.endTime ? Math.floor((result.endTime - result.startTime) / 1000) : "unknown"}s\n\n` +
+            `Result:\n${finalOutput || "(no output captured)"}`,
+        }],
+        details: { 
+          agentId: result.id, 
+          status: result.status,
+        },
+      };
+    },
+  });
+
   // Clean up on shutdown
   pi.on("session_shutdown", async () => {
     for (const [id] of activeAgents) {
