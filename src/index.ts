@@ -10,12 +10,13 @@ interface SubAgent {
   output: string[];
   startTime: number;
   endTime?: number;
-  result?: string;
+  currentTool?: string;
+  lastActivity: number;
 }
 
 const activeAgents = new Map<string, SubAgent>();
 
-function spawnSubAgent(task: string, ctx: ExtensionContext): SubAgent {
+function spawnSubAgent(task: string, parentCtx: ExtensionContext): SubAgent {
   const id = randomUUID().slice(0, 8);
   
   const proc = spawn("pi", ["--mode", "rpc", "--no-session"], {
@@ -29,6 +30,7 @@ function spawnSubAgent(task: string, ctx: ExtensionContext): SubAgent {
     status: "starting",
     output: [],
     startTime: Date.now(),
+    lastActivity: Date.now(),
   };
 
   // Handle stdout (JSON events)
@@ -40,31 +42,34 @@ function spawnSubAgent(task: string, ctx: ExtensionContext): SubAgent {
     
     for (const line of lines) {
       if (!line.trim()) continue;
+      agent.output.push(line);
+      agent.lastActivity = Date.now();
+      
       try {
         const event = JSON.parse(line);
-        agent.output.push(line);
         
-        // Update status based on events
+        // Track what the sub-agent is currently doing
+        if (event.type === "tool_execution_start") {
+          agent.currentTool = `${event.toolName}(${JSON.stringify(event.args).slice(0, 50)}...)`;
+        } else if (event.type === "tool_execution_end" || event.type === "agent_end") {
+          agent.currentTool = undefined;
+        }
+        
+        // Update status
         if (event.type === "agent_start") {
           agent.status = "running";
         } else if (event.type === "agent_end") {
           agent.status = "completed";
           agent.endTime = Date.now();
-          // Extract final messages from agent_end
-          if (event.messages && event.messages.length > 0) {
-            const lastAssistant = event.messages
-              .reverse()
-              .find((m: any) => m.role === "assistant" && m.content);
-            if (lastAssistant) {
-              agent.result = JSON.stringify(lastAssistant.content);
-            }
-          }
+          agent.currentTool = undefined;
         }
       } catch (e) {
-        // Ignore parse errors, store raw
-        agent.output.push(line);
+        // Ignore parse errors
       }
     }
+    
+    // Update widget to show current activity
+    updateSubAgentWidget(parentCtx);
   });
 
   // Handle stderr
@@ -78,85 +83,113 @@ function spawnSubAgent(task: string, ctx: ExtensionContext): SubAgent {
       agent.status = "error";
       agent.endTime = Date.now();
     }
+    updateSubAgentWidget(parentCtx);
   });
 
   // Send the initial prompt
-  const prompt = JSON.stringify({
-    type: "prompt",
-    message: task,
-  });
-  
-  proc.stdin?.write(prompt + "\n", (err) => {
-    if (err) {
-      agent.status = "error";
-      agent.output.push(`[error]: Failed to send prompt: ${err.message}`);
-    }
-  });
+  const prompt = JSON.stringify({ type: "prompt", message: task });
+  proc.stdin?.write(prompt + "\n");
 
   activeAgents.set(id, agent);
+  updateSubAgentWidget(parentCtx);
   return agent;
 }
 
-async function waitForSubAgent(id: string, timeoutMs: number = 60000): Promise<SubAgent | null> {
-  const agent = activeAgents.get(id);
-  if (!agent) return null;
-
-  const startWait = Date.now();
-  while (agent.status !== "completed" && agent.status !== "error") {
-    if (Date.now() - startWait > timeoutMs) {
-      return null; // Timeout
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
+function updateSubAgentWidget(ctx: ExtensionContext) {
+  if (activeAgents.size === 0) {
+    ctx.ui.setWidget("subagent", undefined);
+    ctx.ui.setStatus("subagent", "ready");
+    return;
   }
-  return agent;
+
+  const lines: string[] = ["📦 Active Sub-Agents"];
+  for (const [id, agent] of activeAgents) {
+    const duration = Math.floor((Date.now() - agent.startTime) / 1000);
+    const statusIcon = agent.status === "completed" ? "✓" : 
+                       agent.status === "error" ? "✗" : 
+                       agent.status === "running" ? "▶" : "○";
+    const current = agent.currentTool ? ` - ${agent.currentTool}` : "";
+    lines.push(`  ${statusIcon} ${id}: ${agent.status} (${duration}s)${current}`);
+  }
+  
+  ctx.ui.setWidget("subagent", lines);
+  ctx.ui.setStatus("subagent", `${activeAgents.size} active`);
 }
 
-function killSubAgent(id: string): boolean {
+function getAgentReport(id: string): string {
+  const agent = activeAgents.get(id);
+  if (!agent) return `Agent ${id} not found`;
+
+  // Build a readable transcript of what the sub-agent did
+  const transcript: string[] = [];
+  let currentMessage = "";
+  
+  for (const line of agent.output) {
+    try {
+      const event = JSON.parse(line);
+      
+      if (event.type === "tool_execution_start") {
+        transcript.push(`🔧 ${event.toolName}: ${JSON.stringify(event.args).slice(0, 100)}`);
+      } else if (event.type === "message_update" && event.assistantMessageEvent) {
+        const delta = event.assistantMessageEvent;
+        if (delta.type === "text_delta") {
+          currentMessage += delta.delta;
+        } else if (delta.type === "toolcall_start") {
+          if (currentMessage.trim()) {
+            transcript.push(`💬 ${currentMessage.trim()}`);
+            currentMessage = "";
+          }
+        }
+      } else if (event.type === "agent_end" && event.messages) {
+        // Final assistant messages
+        for (const msg of event.messages) {
+          if (msg.role === "assistant" && Array.isArray(msg.content)) {
+            const text = msg.content
+              .filter((c: any) => c.type === "text")
+              .map((c: any) => c.text)
+              .join("");
+            if (text.trim()) transcript.push(`💬 ${text.trim()}`);
+          }
+        }
+      }
+    } catch {}
+  }
+  
+  if (currentMessage.trim()) {
+    transcript.push(`💬 ${currentMessage.trim()}`);
+  }
+
+  const duration = agent.endTime 
+    ? Math.floor((agent.endTime - agent.startTime) / 1000)
+    : Math.floor((Date.now() - agent.startTime) / 1000);
+
+  return `
+## Sub-Agent ${id}
+
+**Task:** ${agent.task}
+**Status:** ${agent.status}
+**Duration:** ${duration}s
+**Events:** ${agent.output.length}
+
+### Transcript
+${transcript.join("\n\n") || "(no activity yet)"}
+`;
+}
+
+function killSubAgent(id: string, ctx: ExtensionContext): boolean {
   const agent = activeAgents.get(id);
   if (!agent) return false;
   
   agent.process.kill();
   activeAgents.delete(id);
+  updateSubAgentWidget(ctx);
   return true;
 }
 
-function getAgentStatus(id: string): string {
-  const agent = activeAgents.get(id);
-  if (!agent) return `Agent ${id} not found`;
-  
-  const duration = agent.endTime 
-    ? Math.floor((agent.endTime - agent.startTime) / 1000)
-    : Math.floor((Date.now() - agent.startTime) / 1000);
-  
-  // Extract text content from recent message_update events
-  const textOutputs: string[] = [];
-  for (const line of agent.output.slice(-20)) {
-    try {
-      const event = JSON.parse(line);
-      if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
-        textOutputs.push(event.assistantMessageEvent.delta);
-      }
-    } catch {}
-  }
-  
-  const recentText = textOutputs.slice(-10).join("") || "(no text output yet)";
-  
-  return `
-SubAgent ${id}:
-  Status: ${agent.status}
-  Task: ${agent.task}
-  Duration: ${duration}s
-  Output events: ${agent.output.length}
-  
-Recent text output:
-${recentText.slice(0, 500)}${recentText.length > 500 ? "..." : ""}
-`;
-}
-
 export default function (pi: ExtensionAPI) {
-  // Register /subagent command with subcommands
+  // Register /subagent command
   pi.registerCommand("subagent", {
-    description: "Spawn and manage sub-agents via RPC",
+    description: "Spawn and manage sub-agents",
     handler: async (args: string, ctx) => {
       const [subcommand, ...rest] = args.trim().split(/\s+/);
       const subArgs = rest.join(" ");
@@ -169,7 +202,28 @@ export default function (pi: ExtensionAPI) {
           }
           const agent = spawnSubAgent(subArgs, ctx);
           ctx.ui.notify(`Spawned sub-agent ${agent.id}`, "info");
-          ctx.ui.setStatus("subagent", `${activeAgents.size} active`);
+          
+          // Send a message to the conversation showing what was spawned
+          pi.sendMessage({
+            customType: "subagent-spawned",
+            content: `🚀 Spawned sub-agent **${agent.id}**\nTask: ${agent.task}`,
+            display: true,
+          });
+          break;
+
+        case "report":
+          if (!subArgs) {
+            ctx.ui.notify("Usage: /subagent report <id>", "error");
+            return;
+          }
+          const report = getAgentReport(subArgs);
+          // Send to conversation so LLM can see it
+          pi.sendMessage({
+            customType: "subagent-report",
+            content: report,
+            display: true,
+          });
+          ctx.ui.notify(`Report for ${subArgs} added to conversation`, "info");
           break;
 
         case "list":
@@ -177,34 +231,9 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify("No active sub-agents", "info");
           } else {
             const list = Array.from(activeAgents.entries())
-              .map(([id, a]) => `${id}: ${a.status} - "${a.task.slice(0, 50)}..."`)
+              .map(([id, a]) => `${id}: ${a.status}`)
               .join("\n");
             ctx.ui.notify(`Active sub-agents:\n${list}`, "info");
-          }
-          break;
-
-        case "status":
-          if (!subArgs) {
-            ctx.ui.notify("Usage: /subagent status <id>", "error");
-            return;
-          }
-          const status = getAgentStatus(subArgs);
-          ctx.ui.notify(status, "info");
-          break;
-
-        case "wait":
-          if (!subArgs) {
-            ctx.ui.notify("Usage: /subagent wait <id> [timeout_ms]", "error");
-            return;
-          }
-          const [waitId, timeoutStr] = subArgs.split(/\s+/);
-          const timeout = parseInt(timeoutStr) || 60000;
-          ctx.ui.notify(`Waiting for ${waitId} (timeout: ${timeout}ms)...`, "info");
-          const result = await waitForSubAgent(waitId, timeout);
-          if (result) {
-            ctx.ui.notify(`Sub-agent ${waitId} finished with status: ${result.status}`, "info");
-          } else {
-            ctx.ui.notify(`Timeout or agent not found`, "error");
           }
           break;
 
@@ -213,9 +242,8 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify("Usage: /subagent kill <id>", "error");
             return;
           }
-          if (killSubAgent(subArgs)) {
+          if (killSubAgent(subArgs, ctx)) {
             ctx.ui.notify(`Killed sub-agent ${subArgs}`, "info");
-            ctx.ui.setStatus("subagent", `${activeAgents.size} active`);
           } else {
             ctx.ui.notify(`Sub-agent ${subArgs} not found`, "error");
           }
@@ -223,34 +251,30 @@ export default function (pi: ExtensionAPI) {
 
         case "killall":
           for (const [id] of activeAgents) {
-            killSubAgent(id);
+            killSubAgent(id, ctx);
           }
           ctx.ui.notify("Killed all sub-agents", "info");
-          ctx.ui.setStatus("subagent", "0 active");
           break;
 
         default:
-          ctx.ui.notify(
-            "Usage: /subagent {spawn|list|status|wait|kill|killall} [args]",
-            "error"
-          );
+          ctx.ui.notify("Usage: /subagent {spawn|report|list|kill|killall} [args]", "error");
       }
     },
   });
 
-  // Register a tool that LLM can use to spawn sub-agents
+  // Tool: Spawn a sub-agent and immediately show it in conversation
   pi.registerTool({
     name: "spawn_subagent",
     label: "Spawn Sub-Agent",
-    description: "Spawn a pi sub-agent via RPC to handle a task in parallel. " +
-      "The sub-agent runs independently and can use all standard pi tools. " +
-      "Use this to parallelize work or isolate risky operations.",
+    description: "Spawn a sub-agent to work on a task in parallel. " +
+      "The sub-agent will appear in the active agents widget. " +
+      "Use subagent_report to get full details when done.",
     parameters: {
       type: "object",
       properties: {
         task: {
           type: "string",
-          description: "The task to assign to the sub-agent",
+          description: "Clear, specific task for the sub-agent to complete",
         },
       },
       required: ["task"],
@@ -258,185 +282,126 @@ export default function (pi: ExtensionAPI) {
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const agent = spawnSubAgent(params.task, ctx);
       
-      // Wait a bit for the agent to start
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
       return {
         content: [{
           type: "text",
-          text: `Spawned sub-agent ${agent.id}\n` +
-            `Task: ${agent.task}\n` +
-            `Status: ${agent.status}\n` +
-            `\nUse /subagent status ${agent.id} to check progress`,
+          text: `🚀 Spawned sub-agent **${agent.id}**\n` +
+                `Task: ${agent.task}\n\n` +
+                `The sub-agent is now running in parallel. You can:\n` +
+                `- Watch its progress in the widget above\n` +
+                `- Run \`/subagent report ${agent.id}\` to see full details\n` +
+                `- Spawn more sub-agents for parallel work`,
         }],
         details: { agentId: agent.id, task: agent.task },
       };
     },
   });
 
-  // Register a tool that waits for a sub-agent and returns results
+  // Tool: Get a detailed report of what a sub-agent did
   pi.registerTool({
-    name: "wait_for_subagent",
-    label: "Wait for Sub-Agent",
-    description: "Wait for a sub-agent to complete and return its results. " +
-      "Optionally specify a timeout in milliseconds (default: 60s).",
+    name: "subagent_report",
+    label: "Sub-Agent Report",
+    description: "Get a full transcript of a sub-agent's activity. " +
+      "Shows all tool calls, messages, and final results. " +
+      "Use this to understand what a sub-agent accomplished.",
     parameters: {
       type: "object",
       properties: {
         agent_id: {
           type: "string",
-          description: "The ID of the sub-agent to wait for",
-        },
-        timeout_ms: {
-          type: "number",
-          description: "Maximum time to wait in milliseconds",
-          default: 60000,
+          description: "The sub-agent ID to get the report for",
         },
       },
       required: ["agent_id"],
     } as const,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const timeout = params.timeout_ms || 60000;
-      const agent = await waitForSubAgent(params.agent_id, timeout);
-      
-      if (!agent) {
-        return {
-          content: [{
-            type: "text",
-            text: `Sub-agent ${params.agent_id} not found or timed out after ${timeout}ms`,
-          }],
-          isError: true,
-          details: { agentId: params.agent_id, timeout },
-        };
-      }
-      
-      // Extract final result from agent_end event
-      let finalOutput = "";
-      for (const line of agent.output) {
-        try {
-          const event = JSON.parse(line);
-          if (event.type === "agent_end" && event.messages) {
-            const assistantMsgs = event.messages
-              .filter((m: any) => m.role === "assistant")
-              .map((m: any) => {
-                if (typeof m.content === "string") return m.content;
-                if (Array.isArray(m.content)) {
-                  return m.content
-                    .filter((c: any) => c.type === "text")
-                    .map((c: any) => c.text)
-                    .join("\n");
-                }
-                return "";
-              });
-            finalOutput = assistantMsgs.join("\n\n");
-          }
-        } catch {}
-      }
+      const report = getAgentReport(params.agent_id);
       
       return {
         content: [{
           type: "text",
-          text: `Sub-agent ${agent.id} completed with status: ${agent.status}\n\n` +
-            `Task: ${agent.task}\n` +
-            `Duration: ${agent.endTime ? Math.floor((agent.endTime - agent.startTime) / 1000) : "unknown"}s\n\n` +
-            `Result:\n${finalOutput || "(no output captured)"}`,
+          text: report,
         }],
-        details: { 
-          agentId: agent.id, 
-          status: agent.status,
-          result: agent.result,
-        },
+        details: { agentId: params.agent_id },
       };
     },
   });
 
-  // Register a combined tool that spawns and waits
+  // Tool: Spawn multiple sub-agents in parallel and wait for all
   pi.registerTool({
-    name: "run_subagent_task",
-    label: "Run Sub-Agent Task",
-    description: "Spawn a sub-agent, wait for it to complete, and return the results. " +
-      "This is a convenience tool that combines spawn_subagent and wait_for_subagent. " +
-      "Use for tasks that should run in isolation and you need the result from.",
+    name: "spawn_parallel",
+    label: "Spawn Parallel Sub-Agents",
+    description: "Spawn multiple sub-agents to work on different tasks in parallel. " +
+      "Returns when all complete. Great for analyzing multiple files or components.",
     parameters: {
       type: "object",
       properties: {
-        task: {
-          type: "string",
-          description: "The task to assign to the sub-agent",
+        tasks: {
+          type: "array",
+          items: { type: "string" },
+          description: "Array of tasks, one per sub-agent",
         },
         timeout_ms: {
           type: "number",
-          description: "Maximum time to wait in milliseconds",
+          description: "Max time to wait for all to complete",
           default: 120000,
         },
       },
-      required: ["task"],
+      required: ["tasks"],
     } as const,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      // Spawn the sub-agent
-      const agent = spawnSubAgent(params.task, ctx);
+      const agents: SubAgent[] = [];
       
-      // Stream progress updates
+      // Spawn all agents
+      for (const task of params.tasks) {
+        agents.push(spawnSubAgent(task, ctx));
+      }
+      
       onUpdate?.({
         content: [{
           type: "text",
-          text: `Spawned sub-agent ${agent.id}, waiting for completion...`,
+          text: `Spawned ${agents.length} sub-agents:\n` +
+                agents.map(a => `- ${a.id}: ${a.task.slice(0, 50)}...`).join("\n"),
         }],
       });
       
-      // Wait for completion
+      // Wait for all to complete
       const timeout = params.timeout_ms || 120000;
-      const result = await waitForSubAgent(agent.id, timeout);
+      const startTime = Date.now();
       
-      if (!result) {
-        killSubAgent(agent.id);
-        return {
-          content: [{
-            type: "text",
-            text: `Sub-agent ${agent.id} timed out after ${timeout}ms`,
-          }],
-          isError: true,
-          details: { agentId: agent.id, timeout },
-        };
+      while (true) {
+        const allDone = agents.every(a => 
+          a.status === "completed" || a.status === "error"
+        );
+        if (allDone) break;
+        
+        if (Date.now() - startTime > timeout) {
+          return {
+            content: [{
+              type: "text",
+              text: `Timeout after ${timeout}ms. Some sub-agents still running.`,
+            }],
+            isError: true,
+            details: { 
+              agents: agents.map(a => ({ id: a.id, status: a.status })),
+            },
+          };
+        }
+        
+        await new Promise(r => setTimeout(r, 100));
       }
       
-      // Extract final output
-      let finalOutput = "";
-      for (const line of result.output) {
-        try {
-          const event = JSON.parse(line);
-          if (event.type === "agent_end" && event.messages) {
-            const assistantMsgs = event.messages
-              .filter((m: any) => m.role === "assistant")
-              .map((m: any) => {
-                if (typeof m.content === "string") return m.content;
-                if (Array.isArray(m.content)) {
-                  return m.content
-                    .filter((c: any) => c.type === "text")
-                    .map((c: any) => c.text)
-                    .join("\n");
-                }
-                return "";
-              });
-            finalOutput = assistantMsgs.join("\n\n");
-          }
-        } catch {}
-      }
-      
-      // Clean up
-      activeAgents.delete(agent.id);
+      // Generate reports for all
+      const reports = agents.map(a => getAgentReport(a.id));
       
       return {
         content: [{
           type: "text",
-          text: `Sub-agent completed with status: ${result.status}\n\n` +
-            `Task: ${result.task}\n` +
-            `Duration: ${result.endTime ? Math.floor((result.endTime - result.startTime) / 1000) : "unknown"}s\n\n` +
-            `Result:\n${finalOutput || "(no output captured)"}`,
+          text: `## All ${agents.length} Sub-Agents Complete\n\n` +
+                reports.join("\n---\n"),
         }],
-        details: { 
-          agentId: result.id, 
-          status: result.status,
+        details: {
+          agents: agents.map(a => ({ id: a.id, status: a.status })),
         },
       };
     },
@@ -444,12 +409,13 @@ export default function (pi: ExtensionAPI) {
 
   // Clean up on shutdown
   pi.on("session_shutdown", async () => {
-    for (const [id] of activeAgents) {
-      killSubAgent(id);
+    for (const [id, agent] of activeAgents) {
+      agent.process.kill();
     }
+    activeAgents.clear();
   });
 
-  // Set initial status
+  // Set up widget on session start
   pi.on("session_start", async (_event, ctx) => {
     ctx.ui.setStatus("subagent", "ready");
   });
