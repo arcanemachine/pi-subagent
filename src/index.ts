@@ -9,6 +9,8 @@ interface SubAgent {
   status: "starting" | "running" | "completed" | "error";
   output: string[];
   startTime: number;
+  endTime?: number;
+  result?: string;
 }
 
 const activeAgents = new Map<string, SubAgent>();
@@ -47,9 +49,20 @@ function spawnSubAgent(task: string, ctx: ExtensionContext): SubAgent {
           agent.status = "running";
         } else if (event.type === "agent_end") {
           agent.status = "completed";
+          agent.endTime = Date.now();
+          // Extract final messages from agent_end
+          if (event.messages && event.messages.length > 0) {
+            const lastAssistant = event.messages
+              .reverse()
+              .find((m: any) => m.role === "assistant" && m.content);
+            if (lastAssistant) {
+              agent.result = JSON.stringify(lastAssistant.content);
+            }
+          }
         }
       } catch (e) {
-        // Ignore parse errors
+        // Ignore parse errors, store raw
+        agent.output.push(line);
       }
     }
   });
@@ -63,6 +76,7 @@ function spawnSubAgent(task: string, ctx: ExtensionContext): SubAgent {
   proc.on("exit", (code) => {
     if (code !== 0 && agent.status !== "completed") {
       agent.status = "error";
+      agent.endTime = Date.now();
     }
   });
 
@@ -83,6 +97,20 @@ function spawnSubAgent(task: string, ctx: ExtensionContext): SubAgent {
   return agent;
 }
 
+async function waitForSubAgent(id: string, timeoutMs: number = 60000): Promise<SubAgent | null> {
+  const agent = activeAgents.get(id);
+  if (!agent) return null;
+
+  const startWait = Date.now();
+  while (agent.status !== "completed" && agent.status !== "error") {
+    if (Date.now() - startWait > timeoutMs) {
+      return null; // Timeout
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  return agent;
+}
+
 function killSubAgent(id: string): boolean {
   const agent = activeAgents.get(id);
   if (!agent) return false;
@@ -96,18 +124,32 @@ function getAgentStatus(id: string): string {
   const agent = activeAgents.get(id);
   if (!agent) return `Agent ${id} not found`;
   
-  const duration = Math.floor((Date.now() - agent.startTime) / 1000);
-  const recentOutput = agent.output.slice(-5).join("\n");
+  const duration = agent.endTime 
+    ? Math.floor((agent.endTime - agent.startTime) / 1000)
+    : Math.floor((Date.now() - agent.startTime) / 1000);
+  
+  // Extract text content from recent message_update events
+  const textOutputs: string[] = [];
+  for (const line of agent.output.slice(-20)) {
+    try {
+      const event = JSON.parse(line);
+      if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
+        textOutputs.push(event.assistantMessageEvent.delta);
+      }
+    } catch {}
+  }
+  
+  const recentText = textOutputs.slice(-10).join("") || "(no text output yet)";
   
   return `
 SubAgent ${id}:
   Status: ${agent.status}
   Task: ${agent.task}
   Duration: ${duration}s
-  Output lines: ${agent.output.length}
+  Output events: ${agent.output.length}
   
-Recent output:
-${recentOutput || "(no output yet)"}
+Recent text output:
+${recentText.slice(0, 500)}${recentText.length > 500 ? "..." : ""}
 `;
 }
 
@@ -150,6 +192,22 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify(status, "info");
           break;
 
+        case "wait":
+          if (!subArgs) {
+            ctx.ui.notify("Usage: /subagent wait <id> [timeout_ms]", "error");
+            return;
+          }
+          const [waitId, timeoutStr] = subArgs.split(/\s+/);
+          const timeout = parseInt(timeoutStr) || 60000;
+          ctx.ui.notify(`Waiting for ${waitId} (timeout: ${timeout}ms)...`, "info");
+          const result = await waitForSubAgent(waitId, timeout);
+          if (result) {
+            ctx.ui.notify(`Sub-agent ${waitId} finished with status: ${result.status}`, "info");
+          } else {
+            ctx.ui.notify(`Timeout or agent not found`, "error");
+          }
+          break;
+
         case "kill":
           if (!subArgs) {
             ctx.ui.notify("Usage: /subagent kill <id>", "error");
@@ -173,7 +231,7 @@ export default function (pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent {spawn|list|status|kill|killall} [args]",
+            "Usage: /subagent {spawn|list|status|wait|kill|killall} [args]",
             "error"
           );
       }
@@ -212,6 +270,82 @@ export default function (pi: ExtensionAPI) {
             `\nUse /subagent status ${agent.id} to check progress`,
         }],
         details: { agentId: agent.id, task: agent.task },
+      };
+    },
+  });
+
+  // Register a tool that waits for a sub-agent and returns results
+  pi.registerTool({
+    name: "wait_for_subagent",
+    label: "Wait for Sub-Agent",
+    description: "Wait for a sub-agent to complete and return its results. " +
+      "Optionally specify a timeout in milliseconds (default: 60s).",
+    parameters: {
+      type: "object",
+      properties: {
+        agent_id: {
+          type: "string",
+          description: "The ID of the sub-agent to wait for",
+        },
+        timeout_ms: {
+          type: "number",
+          description: "Maximum time to wait in milliseconds",
+          default: 60000,
+        },
+      },
+      required: ["agent_id"],
+    } as const,
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const timeout = params.timeout_ms || 60000;
+      const agent = await waitForSubAgent(params.agent_id, timeout);
+      
+      if (!agent) {
+        return {
+          content: [{
+            type: "text",
+            text: `Sub-agent ${params.agent_id} not found or timed out after ${timeout}ms`,
+          }],
+          isError: true,
+          details: { agentId: params.agent_id, timeout },
+        };
+      }
+      
+      // Extract final result from agent_end event
+      let finalOutput = "";
+      for (const line of agent.output) {
+        try {
+          const event = JSON.parse(line);
+          if (event.type === "agent_end" && event.messages) {
+            const assistantMsgs = event.messages
+              .filter((m: any) => m.role === "assistant")
+              .map((m: any) => {
+                if (typeof m.content === "string") return m.content;
+                if (Array.isArray(m.content)) {
+                  return m.content
+                    .filter((c: any) => c.type === "text")
+                    .map((c: any) => c.text)
+                    .join("\n");
+                }
+                return "";
+              });
+            finalOutput = assistantMsgs.join("\n\n");
+          }
+        } catch {}
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: `Sub-agent ${agent.id} completed with status: ${agent.status}\n\n` +
+            `Task: ${agent.task}\n` +
+            `Duration: ${agent.endTime ? Math.floor((agent.endTime - agent.startTime) / 1000) : "unknown"}s\n\n` +
+            `Result:\n${finalOutput || "(no output captured)"}`,
+        }],
+        details: { 
+          agentId: agent.id, 
+          status: agent.status,
+          result: agent.result,
+        },
       };
     },
   });
