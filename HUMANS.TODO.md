@@ -8,5 +8,5 @@
 5. ~~'interact' command removed~~
 
 ## Future
-6. Test kill functionality
+6. ~~Test kill functionality~~
 7. Test parallel spawning
