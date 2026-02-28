@@ -1,6 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { spawn, ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
 
 
 interface SubAgent {
@@ -18,9 +17,10 @@ interface SubAgent {
 const activeAgents = new Map<string, SubAgent>();
 let currentCtx: ExtensionContext | null = null;
 let watchedAgentIds: Set<string> = new Set();
+let nextAgentId = 1;
 
 function spawnSubAgent(task: string): SubAgent {
-  const id = randomUUID().slice(0, 8);
+  const id = String(nextAgentId++);
   
   const proc = spawn("pi", ["--mode", "rpc", "--no-session"], {
     stdio: ["pipe", "pipe", "pipe"],
