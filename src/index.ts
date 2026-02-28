@@ -161,7 +161,7 @@ function updateWatchWidget() {
     // Header line with status
     const statusIcon = agent.status === "running" ? "⏳" : 
                        agent.status === "completed" ? "✓" : "✗";
-    widgetLines.push(`${statusIcon} ${id} (${agent.status}) | ${agent.output.length} events | ${duration}s`);
+    widgetLines.push(`${statusIcon} ${id} (${agent.status}) | ${duration}s`);
     
     // Task (truncated)
     widgetLines.push(`Task: ${agent.task.slice(0, 50)}${agent.task.length > 50 ? '...' : ''}`);
