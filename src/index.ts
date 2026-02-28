@@ -120,7 +120,7 @@ function updateSubAgentWidget(ctx: ExtensionContext) {
   }
   
   ctx.ui.setWidget("subagent", lines);
-  ctx.ui.setStatus("subagent", activeCount > 0 ? `${activeCount} active` : "ready");
+  ctx.ui.setStatus("subagent", `active subagents: ${activeCount}`);
 }
 
 function getAgentReport(id: string): string {
