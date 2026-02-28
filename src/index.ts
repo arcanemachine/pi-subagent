@@ -174,11 +174,26 @@ function buildTranscriptLines(agent: SubAgent, maxLines: number = 10): string[] 
   return transcript.slice(-maxLines);
 }
 
+function getTranscriptLinesPerAgent(agentCount: number): number {
+  const BASE_BUDGET = 10;
+  const LINES_PER_AGENT = 3;
+  const BASE_AGENT_LINES = 3; // status, task, separator
+  
+  const totalBudget = BASE_BUDGET + (agentCount * LINES_PER_AGENT);
+  const availableForTranscript = totalBudget - (BASE_AGENT_LINES * agentCount);
+  
+  if (availableForTranscript <= 0) return 0;
+  return Math.floor(availableForTranscript / agentCount);
+}
+
 function updateWatchWidget() {
   if (!currentCtx || watchedAgentIds.size === 0) {
     currentCtx?.ui.setWidget("subagent-watch", undefined);
     return;
   }
+
+  const agentCount = watchedAgentIds.size;
+  const transcriptLinesPerAgent = getTranscriptLinesPerAgent(agentCount);
 
   const widgetLines: string[] = [
     "👁 Watching Sub-Agents",
@@ -201,8 +216,8 @@ function updateWatchWidget() {
     // Task (truncated)
     widgetLines.push(`Task: ${agent.task.slice(0, 50)}${agent.task.length > 50 ? '...' : ''}`);
     
-    // Recent transcript (last 10 lines)
-    const transcriptLines = buildTranscriptLines(agent, 10);
+    // Recent transcript (dynamic lines based on agent count)
+    const transcriptLines = buildTranscriptLines(agent, transcriptLinesPerAgent);
     if (transcriptLines.length > 0) {
       widgetLines.push(...transcriptLines);
     }
