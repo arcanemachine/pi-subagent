@@ -9,4 +9,4 @@
 
 ## Future
 6. ~~Test kill functionality~~
-7. Test parallel spawning
+7. ~~Test parallel spawning~~
