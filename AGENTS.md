@@ -24,10 +24,4 @@ A pi extension for spawning sub-agents via RPC.
 
 ## Git Commits
 
-I manage Git commits for this project. I make regular commits with clear messages.
-
-### Conventional Commits
-
-Format: `type(scope): description`
-
-Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
+Commit changes to git with clear messages.
