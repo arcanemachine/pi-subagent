@@ -4,7 +4,7 @@
 1. ~~Status updates immediately when sub-agent completes~~
 2. ~~`/subagent prune` removes completed sub-agents~~
 3. ~~No widget, only status bar~~
-4. Status hides initially and after prune
+4. ~~Status hides initially and after prune~~
 5. ~~'interact' command removed~~
 
 ## Future
