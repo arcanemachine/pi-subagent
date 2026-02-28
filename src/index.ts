@@ -95,15 +95,22 @@ function spawnSubAgent(task: string, parentCtx: ExtensionContext): SubAgent {
   return agent;
 }
 
-function updateSubAgentWidget(ctx: ExtensionContext) {
-  // Count only non-completed agents for status
-  const activeCount = Array.from(activeAgents.values()).filter(
+function getActiveAgentCount(): number {
+  return Array.from(activeAgents.values()).filter(
     a => a.status !== "completed" && a.status !== "error"
   ).length;
+}
+
+function getStatusText(): string {
+  return `active subagents: ${getActiveAgentCount()}`;
+}
+
+function updateSubAgentWidget(ctx: ExtensionContext) {
+  const activeCount = getActiveAgentCount();
   
   if (activeAgents.size === 0) {
     ctx.ui.setWidget("subagent", undefined);
-    ctx.ui.setStatus("subagent", "active subagents: 0");
+    ctx.ui.setStatus("subagent", getStatusText());
     return;
   }
 
@@ -120,7 +127,7 @@ function updateSubAgentWidget(ctx: ExtensionContext) {
   }
   
   ctx.ui.setWidget("subagent", lines);
-  ctx.ui.setStatus("subagent", `active subagents: ${activeCount}`);
+  ctx.ui.setStatus("subagent", getStatusText());
 }
 
 function getAgentReport(id: string): string {
@@ -424,6 +431,6 @@ export default function (pi: ExtensionAPI) {
 
   // Set up widget on session start
   pi.on("session_start", async (_event, ctx) => {
-    ctx.ui.setStatus("subagent", "active subagents: 0");
+    ctx.ui.setStatus("subagent", getStatusText());
   });
 }
