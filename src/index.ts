@@ -274,10 +274,8 @@ export default function (pi: ExtensionAPI) {
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
         { value: "killall", label: "killall — Kill all sub-agents" },
         { value: "prune", label: "prune — Remove completed sub-agents from list" },
-        { value: "show", label: "show <id> — Watch sub-agent in widget" },
-        { value: "hide", label: "hide <id> — Stop watching sub-agent" },
-        { value: "show-all", label: "show-all — Watch all running sub-agents" },
-        { value: "hide-all", label: "hide-all — Stop watching all sub-agents" },
+        { value: "show", label: "show [id] — Watch sub-agent(s) in widget" },
+        { value: "hide", label: "hide [id] — Stop watching sub-agent(s)" },
       ];
       return items.filter((i) => i.value.startsWith(prefix));
     },
@@ -362,7 +360,12 @@ export default function (pi: ExtensionAPI) {
 
         case "show":
           if (!subArgs) {
-            ctx.ui.notify("Usage: /subagent show <id>", "error");
+            // No ID provided, watch all
+            for (const [id] of activeAgents) {
+              watchedAgentIds.add(id);
+            }
+            updateWatchWidget();
+            ctx.ui.notify(`Watching all ${watchedAgentIds.size} sub-agents`, "info");
             return;
           }
           if (!activeAgents.has(subArgs)) {
@@ -376,7 +379,10 @@ export default function (pi: ExtensionAPI) {
 
         case "hide":
           if (!subArgs) {
-            ctx.ui.notify("Usage: /subagent hide <id>", "error");
+            // No ID provided, hide all
+            watchedAgentIds.clear();
+            updateWatchWidget();
+            ctx.ui.notify("Stopped watching all sub-agents", "info");
             return;
           }
           watchedAgentIds.delete(subArgs);
@@ -384,22 +390,8 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify(`Stopped watching sub-agent ${subArgs}`, "info");
           break;
 
-        case "show-all":
-          for (const [id] of activeAgents) {
-            watchedAgentIds.add(id);
-          }
-          updateWatchWidget();
-          ctx.ui.notify(`Watching all ${watchedAgentIds.size} sub-agents`, "info");
-          break;
-
-        case "hide-all":
-          watchedAgentIds.clear();
-          updateWatchWidget();
-          ctx.ui.notify("Stopped watching all sub-agents", "info");
-          break;
-
         default:
-          ctx.ui.notify("Usage: /subagent {spawn|report|list|kill|killall|prune|show|hide|show-all|hide-all} [args]", "error");
+          ctx.ui.notify("Usage: /subagent {spawn|report|list|kill|killall|prune|show|hide} [args]", "error");
       }
     },
   });
