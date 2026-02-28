@@ -23,6 +23,12 @@ function spawnSubAgent(task: string): SubAgent {
   
   const proc = spawn("pi", ["--mode", "rpc", "--no-session"], {
     stdio: ["pipe", "pipe", "pipe"],
+    detached: false,
+  });
+  
+  // Handle spawn errors
+  proc.on("error", (err) => {
+    console.error(`Failed to spawn sub-agent ${id}:`, err);
   });
 
   const agent: SubAgent = {
