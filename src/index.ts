@@ -111,7 +111,12 @@ function getStatusText(): string {
 
 function updateSubAgentStatus() {
   if (!currentCtx) return;
-  currentCtx.ui.setStatus("subagent", getStatusText());
+  
+  if (activeAgents.size === 0) {
+    currentCtx.ui.setStatus("subagent", undefined);
+  } else {
+    currentCtx.ui.setStatus("subagent", getStatusText());
+  }
 }
 
 async function waitForSubAgent(id: string, timeoutMs = 120000): Promise<boolean> {
