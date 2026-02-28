@@ -424,6 +424,6 @@ export default function (pi: ExtensionAPI) {
 
   // Set up widget on session start
   pi.on("session_start", async (_event, ctx) => {
-    ctx.ui.setStatus("subagent", "ready");
+    ctx.ui.setStatus("subagent", "active subagents: 0");
   });
 }
