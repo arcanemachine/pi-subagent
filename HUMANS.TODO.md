@@ -19,6 +19,11 @@
   - Verify only `active subagents: N` shows in bottom status
   - Use `/subagent list` to see agent details
 
+- [ ] Test status hiding
+  - On fresh start, verify NO `active subagents` in status bar
+  - Spawn a sub-agent, verify status appears
+  - Purge all agents, verify status disappears again
+
 ## Future Testing
 
 - [ ] Test `/subagent interact` with arrow keys
