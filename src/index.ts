@@ -223,39 +223,26 @@ async function handleInteract(pi: ExtensionAPI, ctx: ExtensionContext): Promise<
   }));
   
   // Show agent selection dialog
-  const selectedAgentId = await new Promise<string | null>((resolve) => {
-    const container = new Container();
-    container.addChild(new Text("Select sub-agent:", 0, 1));
-    
-    const selectList = new SelectList(agentItems, Math.min(agentItems.length, 10), {
-      selectedPrefix: (t) => ctx.theme.fg("accent", t),
-      selectedText: (t) => ctx.theme.fg("accent", t),
-    });
-    
-    selectList.onSelect = (item) => resolve(item.value as string);
-    selectList.onCancel = () => resolve(null);
-    
-    container.addChild(selectList);
-    container.addChild(new Text(ctx.theme.fg("dim", "↑↓ navigate • enter select • esc cancel"), 1, 0));
-    
-    const border = new DynamicBorder(container, { title: "Sub-Agents" });
-    const handle = ctx.ui.custom(border);
-    
-    handle.handleInput = (data) => {
-      selectList.handleInput(data);
-      handle.requestRender();
-    };
-    
-    selectList.onSelect = (item) => {
-      handle.close();
-      resolve(item.value as string);
-    };
-    
-    selectList.onCancel = () => {
-      handle.close();
-      resolve(null);
-    };
-  });
+  const selectedAgentId = await ctx.ui.custom<string | null>(
+    (_tui, theme, _keybindings, done) => {
+      const container = new Container();
+      container.addChild(new Text("Select sub-agent:", 0, 1));
+      
+      const selectList = new SelectList(agentItems, Math.min(agentItems.length, 10), {
+        selectedPrefix: (t) => theme.fg("accent", t),
+        selectedText: (t) => theme.fg("accent", t),
+      });
+      
+      selectList.onSelect = (item) => done(item.value as string);
+      selectList.onCancel = () => done(null);
+      
+      container.addChild(selectList);
+      container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter select • esc cancel"), 1, 0));
+      
+      return new DynamicBorder(container, { title: "Sub-Agents" });
+    },
+    { overlay: true }
+  );
   
   if (!selectedAgentId) return;
   
@@ -266,37 +253,27 @@ async function handleInteract(pi: ExtensionAPI, ctx: ExtensionContext): Promise<
     { value: "wait", label: "wait — Wait for completion" },
   ];
   
-  const selectedAction = await new Promise<string | null>((resolve) => {
-    const container = new Container();
-    container.addChild(new Text(`Agent: ${selectedAgentId}`, 0, 1));
-    container.addChild(new Text("Select action:", 0, 1));
-    
-    const selectList = new SelectList(actionItems, actionItems.length, {
-      selectedPrefix: (t) => ctx.theme.fg("accent", t),
-      selectedText: (t) => ctx.theme.fg("accent", t),
-    });
-    
-    container.addChild(selectList);
-    container.addChild(new Text(ctx.theme.fg("dim", "↑↓ navigate • enter select • esc cancel"), 1, 0));
-    
-    const border = new DynamicBorder(container, { title: "Action" });
-    const handle = ctx.ui.custom(border);
-    
-    handle.handleInput = (data) => {
-      selectList.handleInput(data);
-      handle.requestRender();
-    };
-    
-    selectList.onSelect = (item) => {
-      handle.close();
-      resolve(item.value as string);
-    };
-    
-    selectList.onCancel = () => {
-      handle.close();
-      resolve(null);
-    };
-  });
+  const selectedAction = await ctx.ui.custom<string | null>(
+    (_tui, theme, _keybindings, done) => {
+      const container = new Container();
+      container.addChild(new Text(`Agent: ${selectedAgentId}`, 0, 1));
+      container.addChild(new Text("Select action:", 0, 1));
+      
+      const selectList = new SelectList(actionItems, actionItems.length, {
+        selectedPrefix: (t) => theme.fg("accent", t),
+        selectedText: (t) => theme.fg("accent", t),
+      });
+      
+      selectList.onSelect = (item) => done(item.value as string);
+      selectList.onCancel = () => done(null);
+      
+      container.addChild(selectList);
+      container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter select • esc cancel"), 1, 0));
+      
+      return new DynamicBorder(container, { title: "Action" });
+    },
+    { overlay: true }
+  );
   
   if (!selectedAction) return;
   
