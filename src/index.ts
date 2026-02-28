@@ -204,6 +204,16 @@ export default function (pi: ExtensionAPI) {
   // Register /subagent command
   pi.registerCommand("subagent", {
     description: "Spawn and manage sub-agents",
+    getArgumentCompletions: (prefix: string) => {
+      const items = [
+        { value: "spawn", label: "spawn <task> — Spawn a new sub-agent" },
+        { value: "report", label: "report <id> — Get transcript of agent activity" },
+        { value: "list", label: "list — List all sub-agents" },
+        { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
+        { value: "killall", label: "killall — Kill all sub-agents" },
+      ];
+      return items.filter((i) => i.value.startsWith(prefix));
+    },
     handler: async (args: string, ctx) => {
       const [subcommand, ...rest] = args.trim().split(/\s+/);
       const subArgs = rest.join(" ");
