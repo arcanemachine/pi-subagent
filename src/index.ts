@@ -467,4 +467,17 @@ export default function (pi: ExtensionAPI) {
     currentCtx = ctx;
     updateSubAgentStatus();
   });
+
+  // Clear subagents when a new session is created (/new command)
+  // Use session_before_switch to clean up in the OLD session before switching
+  pi.on("session_before_switch", async (event) => {
+    if (event.reason === "new") {
+      // Kill any remaining processes and clear the list
+      for (const [id, agent] of activeAgents) {
+        agent.process.kill();
+      }
+      activeAgents.clear();
+      updateSubAgentStatus();
+    }
+  });
 }
