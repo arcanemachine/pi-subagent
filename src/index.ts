@@ -65,7 +65,7 @@ function spawnSubAgent(task: string): SubAgent {
           agent.endTime = Date.now();
           agent.currentTool = undefined;
           // Force immediate widget update on completion
-          updateSubAgentWidget();
+          updateSubAgentStatus();
         }
       } catch (e) {
         // Ignore parse errors
@@ -73,7 +73,7 @@ function spawnSubAgent(task: string): SubAgent {
     }
     
     // Update widget to show current activity
-    updateSubAgentWidget();
+    updateSubAgentStatus();
   });
 
   // Handle stderr
@@ -87,7 +87,7 @@ function spawnSubAgent(task: string): SubAgent {
       agent.status = "error";
       agent.endTime = Date.now();
     }
-    updateSubAgentWidget();
+    updateSubAgentStatus();
   });
 
   // Send the initial prompt
@@ -95,7 +95,7 @@ function spawnSubAgent(task: string): SubAgent {
   proc.stdin?.write(prompt + "\n");
 
   activeAgents.set(id, agent);
-  updateSubAgentWidget();
+  updateSubAgentStatus();
   return agent;
 }
 
@@ -109,30 +109,8 @@ function getStatusText(): string {
   return `active subagents: ${getActiveAgentCount()}`;
 }
 
-function updateSubAgentWidget() {
+function updateSubAgentStatus() {
   if (!currentCtx) return;
-  
-  const activeCount = getActiveAgentCount();
-  
-  if (activeAgents.size === 0) {
-    currentCtx.ui.setWidget("subagent", undefined);
-    currentCtx.ui.setStatus("subagent", getStatusText());
-    return;
-  }
-
-  const lines: string[] = ["📦 Sub-Agents"];
-  for (const [id, agent] of activeAgents) {
-    const duration = agent.endTime 
-      ? Math.floor((agent.endTime - agent.startTime) / 1000)
-      : Math.floor((Date.now() - agent.startTime) / 1000);
-    const statusIcon = agent.status === "completed" ? "✓" : 
-                       agent.status === "error" ? "✗" : 
-                       agent.status === "running" ? "▶" : "○";
-    const current = agent.currentTool ? ` - ${agent.currentTool}` : "";
-    lines.push(`  ${statusIcon} ${id}: ${agent.status} (${duration}s)${current}`);
-  }
-  
-  currentCtx.ui.setWidget("subagent", lines);
   currentCtx.ui.setStatus("subagent", getStatusText());
 }
 
@@ -312,7 +290,7 @@ function killSubAgent(id: string): boolean {
   
   agent.process.kill();
   activeAgents.delete(id);
-  updateSubAgentWidget();
+  updateSubAgentStatus();
   return true;
 }
 
@@ -410,7 +388,7 @@ export default function (pi: ExtensionAPI) {
               purged++;
             }
           }
-          updateSubAgentWidget();
+          updateSubAgentStatus();
           ctx.ui.notify(`Purged ${purged} completed sub-agents`, "info");
           break;
         }
@@ -574,9 +552,9 @@ export default function (pi: ExtensionAPI) {
     activeAgents.clear();
   });
 
-  // Set up widget on session start
+  // Set up status on session start
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
-    updateSubAgentWidget();
+    updateSubAgentStatus();
   });
 }
