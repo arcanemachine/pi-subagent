@@ -311,7 +311,7 @@ export default function (pi: ExtensionAPI) {
         { value: "list", label: "list — List all sub-agents" },
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
         { value: "killall", label: "killall — Kill all sub-agents" },
-        { value: "purge", label: "purge — Remove completed sub-agents from list" },
+        { value: "prune", label: "prune — Remove completed sub-agents from list" },
       ];
       return items.filter((i) => i.value.startsWith(prefix));
     },
@@ -385,21 +385,21 @@ export default function (pi: ExtensionAPI) {
           await handleInteract(pi, ctx);
           break;
 
-        case "purge": {
-          let purged = 0;
+        case "prune": {
+          let pruned = 0;
           for (const [id, agent] of activeAgents) {
             if (agent.status === "completed" || agent.status === "error") {
               activeAgents.delete(id);
-              purged++;
+              pruned++;
             }
           }
           updateSubAgentStatus();
-          ctx.ui.notify(`Purged ${purged} completed sub-agents`, "info");
+          ctx.ui.notify(`Pruned ${pruned} completed sub-agents`, "info");
           break;
         }
 
         default:
-          ctx.ui.notify("Usage: /subagent {spawn|interact|report|list|kill|killall|purge} [args]", "error");
+          ctx.ui.notify("Usage: /subagent {spawn|interact|report|list|kill|killall|prune} [args]", "error");
       }
     },
   });
