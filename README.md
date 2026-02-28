@@ -15,7 +15,7 @@ A pi extension that enables spawning sub-agents via RPC for parallel task execut
 ### Local Development
 
 ```bash
-cd /workspace/projects/pi-agent
+cd /workspace/projects/pi-subagent
 pi -e ./src/index.ts
 ```
 
@@ -133,7 +133,7 @@ Main pi session (with extension)
 ### Project Structure
 
 ```
-pi-agent/
+pi-subagent/
 ├── src/
 │   └── index.ts       # Main extension
 ├── test.sh            # Test helper script
