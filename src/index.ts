@@ -16,8 +16,9 @@ interface SubAgent {
 }
 
 const activeAgents = new Map<string, SubAgent>();
+let currentCtx: ExtensionContext | null = null;
 
-function spawnSubAgent(task: string, parentCtx: ExtensionContext): SubAgent {
+function spawnSubAgent(task: string): SubAgent {
   const id = randomUUID().slice(0, 8);
   
   const proc = spawn("pi", ["--mode", "rpc", "--no-session"], {
@@ -63,6 +64,8 @@ function spawnSubAgent(task: string, parentCtx: ExtensionContext): SubAgent {
           agent.status = "completed";
           agent.endTime = Date.now();
           agent.currentTool = undefined;
+          // Force immediate widget update on completion
+          updateSubAgentWidget();
         }
       } catch (e) {
         // Ignore parse errors
@@ -70,7 +73,7 @@ function spawnSubAgent(task: string, parentCtx: ExtensionContext): SubAgent {
     }
     
     // Update widget to show current activity
-    updateSubAgentWidget(parentCtx);
+    updateSubAgentWidget();
   });
 
   // Handle stderr
@@ -84,7 +87,7 @@ function spawnSubAgent(task: string, parentCtx: ExtensionContext): SubAgent {
       agent.status = "error";
       agent.endTime = Date.now();
     }
-    updateSubAgentWidget(parentCtx);
+    updateSubAgentWidget();
   });
 
   // Send the initial prompt
@@ -92,7 +95,7 @@ function spawnSubAgent(task: string, parentCtx: ExtensionContext): SubAgent {
   proc.stdin?.write(prompt + "\n");
 
   activeAgents.set(id, agent);
-  updateSubAgentWidget(parentCtx);
+  updateSubAgentWidget();
   return agent;
 }
 
@@ -106,12 +109,14 @@ function getStatusText(): string {
   return `active subagents: ${getActiveAgentCount()}`;
 }
 
-function updateSubAgentWidget(ctx: ExtensionContext) {
+function updateSubAgentWidget() {
+  if (!currentCtx) return;
+  
   const activeCount = getActiveAgentCount();
   
   if (activeAgents.size === 0) {
-    ctx.ui.setWidget("subagent", undefined);
-    ctx.ui.setStatus("subagent", getStatusText());
+    currentCtx.ui.setWidget("subagent", undefined);
+    currentCtx.ui.setStatus("subagent", getStatusText());
     return;
   }
 
@@ -127,8 +132,8 @@ function updateSubAgentWidget(ctx: ExtensionContext) {
     lines.push(`  ${statusIcon} ${id}: ${agent.status} (${duration}s)${current}`);
   }
   
-  ctx.ui.setWidget("subagent", lines);
-  ctx.ui.setStatus("subagent", getStatusText());
+  currentCtx.ui.setWidget("subagent", lines);
+  currentCtx.ui.setStatus("subagent", getStatusText());
 }
 
 async function waitForSubAgent(id: string, timeoutMs = 120000): Promise<boolean> {
@@ -289,7 +294,7 @@ async function handleInteract(pi: ExtensionAPI, ctx: ExtensionContext): Promise<
       ctx.ui.notify(`Report for ${selectedAgentId} added to conversation`, "info");
       break;
     case "kill":
-      if (killSubAgent(selectedAgentId, ctx)) {
+      if (killSubAgent(selectedAgentId)) {
         ctx.ui.notify(`Killed sub-agent ${selectedAgentId}`, "info");
       }
       break;
@@ -301,13 +306,13 @@ async function handleInteract(pi: ExtensionAPI, ctx: ExtensionContext): Promise<
   }
 }
 
-function killSubAgent(id: string, ctx: ExtensionContext): boolean {
+function killSubAgent(id: string): boolean {
   const agent = activeAgents.get(id);
   if (!agent) return false;
   
   agent.process.kill();
   activeAgents.delete(id);
-  updateSubAgentWidget(ctx);
+  updateSubAgentWidget();
   return true;
 }
 
@@ -336,7 +341,7 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify("Usage: /subagent spawn <task>", "error");
             return;
           }
-          const agent = spawnSubAgent(subArgs, ctx);
+          const agent = spawnSubAgent(subArgs);
           ctx.ui.notify(`Spawned sub-agent ${agent.id}`, "info");
           
           // Send a message to the conversation showing what was spawned
@@ -378,7 +383,7 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify("Usage: /subagent kill <id>", "error");
             return;
           }
-          if (killSubAgent(subArgs, ctx)) {
+          if (killSubAgent(subArgs)) {
             ctx.ui.notify(`Killed sub-agent ${subArgs}`, "info");
           } else {
             ctx.ui.notify(`Sub-agent ${subArgs} not found`, "error");
@@ -387,7 +392,7 @@ export default function (pi: ExtensionAPI) {
 
         case "killall":
           for (const [id] of activeAgents) {
-            killSubAgent(id, ctx);
+            killSubAgent(id);
           }
           ctx.ui.notify("Killed all sub-agents", "info");
           break;
@@ -420,7 +425,7 @@ export default function (pi: ExtensionAPI) {
       required: ["task"],
     } as const,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const agent = spawnSubAgent(params.task, ctx);
+      const agent = spawnSubAgent(params.task);
       
       return {
         content: [{
@@ -494,7 +499,7 @@ export default function (pi: ExtensionAPI) {
       
       // Spawn all agents
       for (const task of params.tasks) {
-        agents.push(spawnSubAgent(task, ctx));
+        agents.push(spawnSubAgent(task));
       }
       
       onUpdate?.({
@@ -557,6 +562,7 @@ export default function (pi: ExtensionAPI) {
 
   // Set up widget on session start
   pi.on("session_start", async (_event, ctx) => {
-    ctx.ui.setStatus("subagent", getStatusText());
+    currentCtx = ctx;
+    updateSubAgentWidget();
   });
 }
