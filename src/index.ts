@@ -103,7 +103,7 @@ function updateSubAgentWidget(ctx: ExtensionContext) {
   
   if (activeAgents.size === 0) {
     ctx.ui.setWidget("subagent", undefined);
-    ctx.ui.setStatus("subagent", "ready");
+    ctx.ui.setStatus("subagent", "active subagents: 0");
     return;
   }
 
