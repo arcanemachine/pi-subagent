@@ -400,7 +400,7 @@ export default function (pi: ExtensionAPI) {
               watchedAgentIds.add(id);
             }
             updateWatchWidget();
-            ctx.ui.notify(`Watching all ${watchedAgentIds.size} sub-agents`, "info");
+            ctx.ui.notify("Watching all sub-agents", "info");
             return;
           }
           if (!activeAgents.has(subArgs)) {
