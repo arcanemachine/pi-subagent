@@ -274,8 +274,8 @@ export default function (pi: ExtensionAPI) {
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
         { value: "killall", label: "killall — Kill all sub-agents" },
         { value: "prune", label: "prune — Remove completed sub-agents from list" },
-        { value: "show", label: "show [id] — Watch sub-agent(s) in widget" },
-        { value: "hide", label: "hide [id] — Stop watching sub-agent(s)" },
+        { value: "show", label: "show [id] — Watch sub-agent (no ID = all)" },
+        { value: "hide", label: "hide [id] — Stop watching (no ID = all)" },
       ];
       return items.filter((i) => i.value.startsWith(prefix));
     },
