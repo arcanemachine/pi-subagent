@@ -245,7 +245,6 @@ function getAgentReport(id: string): string {
 **Task:** ${agent.task}
 **Status:** ${agent.status}
 **Duration:** ${duration}s
-**Events:** ${agent.output.length}
 
 ### Transcript
 ${transcript.join("\n\n") || "(no activity yet)"}
