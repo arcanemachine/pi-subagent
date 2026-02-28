@@ -1,12 +1,12 @@
 # Human TODOs
 
 ## Verify
-- [ ] Status updates immediately when sub-agent completes
-- [ ] `/subagent purge` removes completed agents
-- [ ] No widget, only status bar
-- [ ] Status hides initially and after purge
+1. ~~Status updates immediately when sub-agent completes~~
+2. `/subagent prune` removes completed sub-agents
+3. No widget, only status bar
+4. Status hides initially and after prune
 
 ## Future
-- [ ] Test `/subagent interact` with arrow keys
-- [ ] Test kill functionality
-- [ ] Test parallel spawning
+5. Test `/subagent interact` with arrow keys
+6. Test kill functionality
+7. Test parallel spawning

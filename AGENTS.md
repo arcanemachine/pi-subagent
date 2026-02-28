@@ -22,7 +22,11 @@ A pi extension for spawning sub-agents via RPC.
 3. Tracking: `Map<string, SubAgent>`
 4. Display: Widget shows all agents, status shows active count
 
-## Conventional Commits
+## Git Commits
+
+I manage Git commits for this project. I make regular commits with clear messages.
+
+### Conventional Commits
 
 Format: `type(scope): description`
 
