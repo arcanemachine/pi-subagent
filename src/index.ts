@@ -139,6 +139,41 @@ function updateSubAgentStatus() {
   }
 }
 
+function buildTranscriptLines(agent: SubAgent, maxLines: number = 10): string[] {
+  const transcript: string[] = [];
+  let currentMessage = "";
+  
+  for (const line of agent.output) {
+    try {
+      const event = JSON.parse(line);
+      
+      if (event.type === "tool_execution_start") {
+        // Flush any pending message first
+        if (currentMessage.trim()) {
+          transcript.push(`💬 ${currentMessage.trim()}`);
+          currentMessage = "";
+        }
+        transcript.push(`🔧 ${event.toolName}: ${JSON.stringify(event.args).slice(0, 100)}`);
+      } else if (event.type === "message_update" && event.assistantMessageEvent) {
+        const delta = event.assistantMessageEvent;
+        if (delta.type === "text_delta") {
+          currentMessage += delta.delta;
+        } else if (delta.type === "toolcall_start") {
+          if (currentMessage.trim()) {
+            transcript.push(`💬 ${currentMessage.trim()}`);
+            currentMessage = "";
+          }
+        }
+      }
+    } catch {}
+  }
+  
+  // Don't include incomplete message - it will be added on next update
+  
+  // Return last N lines
+  return transcript.slice(-maxLines);
+}
+
 function updateWatchWidget() {
   if (!currentCtx || watchedAgentIds.size === 0) {
     currentCtx?.ui.setWidget("subagent-watch", undefined);
@@ -166,9 +201,10 @@ function updateWatchWidget() {
     // Task (truncated)
     widgetLines.push(`Task: ${agent.task.slice(0, 50)}${agent.task.length > 50 ? '...' : ''}`);
     
-    // Current tool if running
-    if (agent.status === "running" && agent.currentTool) {
-      widgetLines.push(`🔧 ${agent.currentTool}`);
+    // Recent transcript (last 10 lines)
+    const transcriptLines = buildTranscriptLines(agent, 10);
+    if (transcriptLines.length > 0) {
+      widgetLines.push(...transcriptLines);
     }
 
     // Separator between agents
