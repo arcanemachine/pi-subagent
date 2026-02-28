@@ -24,4 +24,4 @@ A pi extension for spawning sub-agents via RPC.
 
 ## Git Commits
 
-I commit changes to git with clear messages. The user handles pushing.
+The agent commits changes to git with clear messages. The user handles pushing.
