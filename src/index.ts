@@ -146,7 +146,7 @@ function updateWatchWidget() {
   }
 
   const widgetLines: string[] = [
-    `👁 Watching ${watchedAgentIds.size} Sub-Agent${watchedAgentIds.size > 1 ? 's' : ''}`,
+    "👁 Watching Sub-Agents",
     "────────────────────────────────────────",
   ];
 
