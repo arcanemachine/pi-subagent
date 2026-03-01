@@ -366,6 +366,7 @@ export default function (pi: ExtensionAPI) {
         },
         { value: "show", label: "show [id] — Watch sub-agent (no ID = all)" },
         { value: "hide", label: "hide [id] — Stop watching (no ID = all)" },
+        { value: "append", label: "append <id> — Add report to context" },
       ];
       return items.filter((i) => i.value.startsWith(prefix));
     },
@@ -396,10 +397,20 @@ export default function (pi: ExtensionAPI) {
             return;
           }
           const report = getAgentReport(subArgs);
+          // Just display to user, don't add to context
+          ctx.ui.notify(report, "info");
+          break;
+
+        case "append":
+          if (!subArgs) {
+            ctx.ui.notify("Usage: /subagent append <id>", "error");
+            return;
+          }
+          const reportToAppend = getAgentReport(subArgs);
           // Send to conversation so LLM can see it
           pi.sendMessage({
             customType: "subagent-report",
-            content: report,
+            content: reportToAppend,
             display: true,
           });
           ctx.ui.notify(`Report for ${subArgs} added to conversation`, "info");
@@ -490,7 +501,7 @@ export default function (pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent {spawn|report|list|kill|killall|prune|show|hide} [args]",
+            "Usage: /subagent {spawn|report|append|list|kill|killall|prune|show|hide} [args]",
             "error",
           );
       }
