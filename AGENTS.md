@@ -49,6 +49,18 @@ A pi extension for spawning sub-agents via RPC.
 | `show [id]` | Watch in widget (no ID = all) |
 | `hide [id]` | Stop watching (no ID = all) |
 
+## Pre-commit Checks
+
+Before committing, run:
+
+```bash
+# Type check
+npx tsc --noEmit
+
+# Format code
+npx prettier --write src/index.ts
+```
+
 ## Git Commits
 
 The agent commits changes to git with clear messages. The user handles pushing.
