@@ -20,11 +20,6 @@ let watchedAgentIds: Set<string> = new Set();
 let nextAgentId = 1;
 let watchAllMode = false;         // True when watching all agents (auto-add new ones)
 
-// Widget sizing config (tweakable)
-const BASE_BUDGET = 10;           // Minimum lines for 1-2 agents
-const LINES_PER_AGENT = 5;        // Additional lines per agent
-const BASE_AGENT_LINES = 3;       // status, task, separator per agent
-
 function spawnSubAgent(task: string): SubAgent {
   const id = String(nextAgentId++);
   
@@ -187,13 +182,6 @@ function buildTranscriptLines(agent: SubAgent, maxLines: number = 10): string[] 
   return transcript.slice(-maxLines);
 }
 
-function getTranscriptLinesPerAgent(agentCount: number): number {
-  // Total lines per agent: 10, 5, 3, 3, 3...
-  const linesPerAgent = agentCount === 1 ? 10 : agentCount === 2 ? 5 : 3;
-  // Transcript lines = total minus base (status, task, separator)
-  return Math.max(0, linesPerAgent - BASE_AGENT_LINES);
-}
-
 function updateWatchWidget() {
   if (!currentCtx || watchedAgentIds.size === 0) {
     currentCtx?.ui.setWidget("subagent-watch", undefined);
@@ -201,7 +189,7 @@ function updateWatchWidget() {
   }
 
   const agentCount = watchedAgentIds.size;
-  const transcriptLinesPerAgent = getTranscriptLinesPerAgent(agentCount);
+  const compactMode = agentCount >= 3;
 
   const widgetLines: string[] = [
     "👁 Watching Sub-Agents",
@@ -216,22 +204,24 @@ function updateWatchWidget() {
       ? Math.floor((agent.endTime - agent.startTime) / 1000)
       : Math.floor((Date.now() - agent.startTime) / 1000);
 
-    // Header line with status
     const statusIcon = agent.status === "running" ? "⏳" : 
                        agent.status === "completed" ? "✓" : "✗";
-    widgetLines.push(`${statusIcon} ${id} (${agent.status}) | ${duration}s`);
-    
-    // Task (truncated)
-    widgetLines.push(`Task: ${agent.task.slice(0, 50)}${agent.task.length > 50 ? '...' : ''}`);
-    
-    // Recent transcript (dynamic lines based on agent count)
-    const transcriptLines = buildTranscriptLines(agent, transcriptLinesPerAgent);
-    if (transcriptLines.length > 0) {
-      widgetLines.push(...transcriptLines);
-    }
 
-    // Separator between agents
-    widgetLines.push("────────────────────────────────────────");
+    if (compactMode) {
+      // Compact: one line per agent
+      const toolInfo = agent.currentTool ? ` | ${agent.currentTool.slice(0, 40)}` : '';
+      widgetLines.push(`${statusIcon} ${id} ${agent.status} ${duration}s${toolInfo}`);
+    } else {
+      // Verbose: full info with transcript
+      widgetLines.push(`${statusIcon} ${id} (${agent.status}) | ${duration}s`);
+      widgetLines.push(`Task: ${agent.task.slice(0, 50)}${agent.task.length > 50 ? '...' : ''}`);
+      
+      const transcriptLines = buildTranscriptLines(agent, 5);
+      if (transcriptLines.length > 0) {
+        widgetLines.push(...transcriptLines);
+      }
+      widgetLines.push("────────────────────────────────────────");
+    }
   }
 
   currentCtx.ui.setWidget("subagent-watch", widgetLines);
