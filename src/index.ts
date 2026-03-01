@@ -188,11 +188,10 @@ function buildTranscriptLines(agent: SubAgent, maxLines: number = 10): string[] 
 }
 
 function getTranscriptLinesPerAgent(agentCount: number): number {
-  const totalBudget = Math.max(BASE_BUDGET, agentCount * LINES_PER_AGENT);
-  const availableForTranscript = totalBudget - (BASE_AGENT_LINES * agentCount);
-  
-  if (availableForTranscript <= 0) return 0;
-  return Math.floor(availableForTranscript / agentCount);
+  // Total lines per agent: 10, 5, 3, 3, 3...
+  const linesPerAgent = agentCount === 1 ? 10 : agentCount === 2 ? 5 : 3;
+  // Transcript lines = total minus base (status, task, separator)
+  return Math.max(0, linesPerAgent - BASE_AGENT_LINES);
 }
 
 function updateWatchWidget() {
