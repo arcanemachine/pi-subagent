@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "description": "Pi extension for spawning sub-agents via RPC for parallel task execution",
   "type": "module",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "scripts": {
     "build": "tsc",
