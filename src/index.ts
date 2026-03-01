@@ -526,8 +526,8 @@ export default function (pi: ExtensionAPI) {
         },
       },
       required: ["task"],
-    } as const,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
+    } as any,
+    async execute(toolCallId, params: { task: string }, signal, onUpdate, ctx) {
       const agent = spawnSubAgent(params.task);
 
       return {
@@ -565,8 +565,14 @@ export default function (pi: ExtensionAPI) {
         },
       },
       required: ["agent_id"],
-    } as const,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
+    } as any,
+    async execute(
+      toolCallId,
+      params: { agent_id: string },
+      signal,
+      onUpdate,
+      ctx,
+    ) {
       const report = getAgentReport(params.agent_id);
 
       return {
@@ -603,8 +609,14 @@ export default function (pi: ExtensionAPI) {
         },
       },
       required: ["tasks"],
-    } as const,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
+    } as any,
+    async execute(
+      toolCallId,
+      params: { tasks: string[]; timeout_ms?: number },
+      signal,
+      onUpdate,
+      ctx,
+    ) {
       const agents: SubAgent[] = [];
 
       // Spawn all agents
@@ -623,6 +635,7 @@ export default function (pi: ExtensionAPI) {
                 .join("\n"),
           },
         ],
+        details: { agentCount: agents.length },
       });
 
       // Wait for all to complete

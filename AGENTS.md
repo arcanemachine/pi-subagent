@@ -1,66 +1,26 @@
-# pi-subagent
+# Agent Instructions
 
-A pi extension for spawning sub-agents via RPC.
+## Workflow
 
-## Project Structure
+Commit when a task is completed.
 
-- Main file: `src/index.ts`
-- Install: `ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent`
-- Test: `pi -e ./src/index.ts`
-
-## Key Functions
-
-- `spawnSubAgent(task)` - Spawn a new sub-agent process via RPC
-- `updateSubAgentStatus()` - Update footer status with active count
-- `updateWatchWidget()` - Update live widget with watched agents
-- `getAgentReport(id)` - Generate transcript of agent activity
-- `killSubAgent(id)` - Kill a specific sub-agent
-
-## State Management
-
-- `activeAgents: Map<string, SubAgent>` - All sub-agents (running and completed)
-- `watchedAgentIds: Set<string>` - IDs of agents being watched in widget
-- `currentCtx: ExtensionContext | null` - Current extension context for UI updates
-
-## Data Flow
-
-1. **Spawn**: `pi --mode rpc --no-session` process created
-2. **Events**: JSON events over stdin/stdout (tool_execution_start, message_update, agent_end, etc.)
-3. **Tracking**: Events parsed and stored in `agent.output` array
-4. **Status**: Footer shows active count via `updateSubAgentStatus()`
-5. **Widget**: Live view of watched agents via `updateWatchWidget()`
-
-## Event Handling
-
-- `session_start` - Set up context and status
-- `session_before_switch` - Kill processes and clear state on `/new`
-- `session_shutdown` - Clean up on exit
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `spawn <task>` | Spawn new sub-agent |
-| `report <id>` | View transcript (user only) |
-| `append <id>` | View transcript and add to context |
-| `list` | List all sub-agents |
-| `kill <id>` | Kill specific sub-agent |
-| `killall` | Kill all sub-agents |
-| `prune` | Remove completed from list |
-| `show [id]` | Watch in widget (no ID = all) |
-| `hide [id]` | Stop watching (no ID = all) |
-
-## Pre-commit Checks
-
-Before committing, run:
+## Pre-commit
 
 ```bash
-# Format code
+npm install
+npx tsc --noEmit
 npx prettier --write src/index.ts
 ```
 
-Note: Type checking requires `@mariozechner/pi-coding-agent` types which are only available when the extension is installed within PI. The extension is type-checked by PI on load.
+## Commit Style
 
-## Git Commits
+Match existing commits:
+- `chore: add pi-package manifest and update README`
+- `style: add separators around report output`
+- `Fix TypeScript types and add dev dependency`
 
-The agent commits changes to git with clear messages. The user handles pushing.
+## Critical Implementation Notes
+
+- Sub-agents run via `pi --mode rpc --no-session`
+- Always kill processes on `session_before_switch` (reason: "new")
+- Widget updates use `ctx.ui.setWidget()` and `ctx.ui.setStatus()`
