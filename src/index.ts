@@ -183,10 +183,7 @@ function buildTranscriptLines(agent: SubAgent, maxLines: number = 10): string[] 
 }
 
 function updateWatchWidget() {
-  if (!currentCtx || watchedAgentIds.size === 0) {
-    currentCtx?.ui.setWidget("subagent-watch", undefined);
-    return;
-  }
+  if (!currentCtx) return;
 
   // Clean up watched IDs that no longer exist
   for (const id of watchedAgentIds) {
@@ -195,12 +192,14 @@ function updateWatchWidget() {
     }
   }
 
-  // If cleanup removed all agents, show empty state
+  // If no agents to watch, show empty state or clear
   if (watchedAgentIds.size === 0) {
-    const emptyMessage = watchAllMode 
-      ? "👁 Watching all sub-agents\n────────────────────────────────────────\nNo sub-agents running"
-      : "👁 Watching all sub-agents\n────────────────────────────────────────\nNone selected";
-    currentCtx.ui.setWidget("subagent-watch", emptyMessage.split('\n'));
+    if (watchAllMode) {
+      const emptyMessage = "👁 Watching all sub-agents\n────────────────────────────────────────\nNo sub-agents running";
+      currentCtx.ui.setWidget("subagent-watch", emptyMessage.split('\n'));
+    } else {
+      currentCtx.ui.setWidget("subagent-watch", undefined);
+    }
     return;
   }
 
