@@ -280,7 +280,7 @@ function getAgentReport(id: string): string {
             currentMessage = "";
           }
         }
-
+      }
     } catch {}
   }
   
