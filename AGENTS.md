@@ -41,7 +41,8 @@ A pi extension for spawning sub-agents via RPC.
 | Command | Description |
 |---------|-------------|
 | `spawn <task>` | Spawn new sub-agent |
-| `report <id>` | Get full transcript |
+| `report <id>` | View transcript (user only) |
+| `append <id>` | View transcript and add to context |
 | `list` | List all sub-agents |
 | `kill <id>` | Kill specific sub-agent |
 | `killall` | Kill all sub-agents |

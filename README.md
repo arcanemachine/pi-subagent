@@ -29,7 +29,8 @@ cp src/index.ts ~/.pi/agent/extensions/pi-subagent/
 ### Commands
 
 - `/subagent spawn <task>` - Spawn a new sub-agent
-- `/subagent report <id>` - Get transcript of agent activity
+- `/subagent report <id>` - View transcript (user only, not added to context)
+- `/subagent append <id>` - View transcript and add to conversation context
 - `/subagent list` - List all sub-agents
 - `/subagent kill <id>` - Kill a specific sub-agent
 - `/subagent killall` - Kill all sub-agents
