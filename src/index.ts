@@ -433,8 +433,9 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify("Watching all sub-agents", "info");
             return;
           }
-          // Watching specific agent, disable watch-all mode
+          // Watching specific agent, disable watch-all mode and clear existing
           watchAllMode = false;
+          watchedAgentIds.clear();
           if (!activeAgents.has(subArgs)) {
             ctx.ui.notify(`Sub-agent ${subArgs} not found`, "error");
             return;
