@@ -188,6 +188,19 @@ function updateWatchWidget() {
     return;
   }
 
+  // Clean up watched IDs that no longer exist
+  for (const id of watchedAgentIds) {
+    if (!activeAgents.has(id)) {
+      watchedAgentIds.delete(id);
+    }
+  }
+
+  // If cleanup removed all agents, clear widget
+  if (watchedAgentIds.size === 0) {
+    currentCtx.ui.setWidget("subagent-watch", undefined);
+    return;
+  }
+
   const agentCount = watchedAgentIds.size;
   const compactMode = agentCount >= 3;
 
