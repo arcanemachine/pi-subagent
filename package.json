@@ -1,6 +1,21 @@
 {
+  "name": "pi-subagent",
+  "version": "1.0.0",
+  "description": "Pi extension for spawning sub-agents via RPC for parallel task execution",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
   "devDependencies": {
     "@types/node": "^25.3.3",
     "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
   }
 }

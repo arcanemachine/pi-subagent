@@ -13,15 +13,30 @@ A pi extension that enables spawning sub-agents via RPC for parallel task execut
 
 ## Installation
 
+### From GitHub (Recommended)
+
+```bash
+pi install git:github.com/arcanemachine/pi-subagent
 ```
+
+To update to the latest version:
+
+```bash
+pi update git:github.com/arcanemachine/pi-subagent
+```
+
+### From Local Clone
+
+```bash
+git clone https://github.com/arcanemachine/pi-subagent.git
+cd pi-subagent
+pi install /path/to/pi-subagent
+```
+
+Or use a symlink for development:
+
+```bash
 ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
-```
-
-Or copy the extension:
-
-```
-mkdir -p ~/.pi/agent/extensions/pi-subagent
-cp src/index.ts ~/.pi/agent/extensions/pi-subagent/
 ```
 
 ## Usage
