@@ -55,12 +55,11 @@ A pi extension for spawning sub-agents via RPC.
 Before committing, run:
 
 ```bash
-# Type check
-npx tsc --noEmit
-
 # Format code
 npx prettier --write src/index.ts
 ```
+
+Note: Type checking requires `@mariozechner/pi-coding-agent` types which are only available when the extension is installed within PI. The extension is type-checked by PI on load.
 
 ## Git Commits
 
