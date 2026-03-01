@@ -8,7 +8,7 @@ A pi extension that enables spawning sub-agents via RPC for parallel task execut
 - Fire-and-forget or wait for results from sub-agents
 - Manage multiple concurrent sub-agents
 - Track status and output of running sub-agents
-- **Live widget to watch sub-agent activity in real-time**
+- Live widget to watch sub-agent activity in real-time
 - Automatic cleanup on session shutdown and `/new`
 
 ## Installation

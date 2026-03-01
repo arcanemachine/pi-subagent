@@ -398,7 +398,8 @@ export default function (pi: ExtensionAPI) {
           }
           const report = getAgentReport(subArgs);
           // Just display to user, don't add to context
-          ctx.ui.notify(report, "info");
+          const separator = "─".repeat(40);
+          ctx.ui.notify(`${separator}\n${report}\n${separator}`, "info");
           break;
 
         case "append":
