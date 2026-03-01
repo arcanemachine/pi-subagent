@@ -19,6 +19,11 @@ let currentCtx: ExtensionContext | null = null;
 let watchedAgentIds: Set<string> = new Set();
 let nextAgentId = 1;
 
+// Widget sizing config (tweakable)
+const BASE_BUDGET = 10;           // Minimum lines for 1-2 agents
+const LINES_PER_AGENT = 5;        // Additional lines per agent
+const BASE_AGENT_LINES = 3;       // status, task, separator per agent
+
 function spawnSubAgent(task: string): SubAgent {
   const id = String(nextAgentId++);
   
@@ -175,11 +180,7 @@ function buildTranscriptLines(agent: SubAgent, maxLines: number = 10): string[] 
 }
 
 function getTranscriptLinesPerAgent(agentCount: number): number {
-  const BASE_BUDGET = 10;
-  const LINES_PER_AGENT = 3;
-  const BASE_AGENT_LINES = 3; // status, task, separator
-  
-  const totalBudget = BASE_BUDGET + (agentCount * LINES_PER_AGENT);
+  const totalBudget = Math.max(BASE_BUDGET, agentCount * LINES_PER_AGENT);
   const availableForTranscript = totalBudget - (BASE_AGENT_LINES * agentCount);
   
   if (availableForTranscript <= 0) return 0;
