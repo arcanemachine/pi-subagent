@@ -192,7 +192,7 @@ function updateWatchWidget() {
   const compactMode = agentCount >= 3;
 
   const widgetLines: string[] = [
-    "👁 Watching Sub-Agents",
+    "👁 Watching all sub-agents",
     "────────────────────────────────────────",
   ];
 
