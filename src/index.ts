@@ -280,18 +280,7 @@ function getAgentReport(id: string): string {
             currentMessage = "";
           }
         }
-      } else if (event.type === "agent_end" && event.messages) {
-        // Final assistant messages
-        for (const msg of event.messages) {
-          if (msg.role === "assistant" && Array.isArray(msg.content)) {
-            const text = msg.content
-              .filter((c: any) => c.type === "text")
-              .map((c: any) => c.text)
-              .join("");
-            if (text.trim()) transcript.push(`💬 ${text.trim()}`);
-          }
-        }
-      }
+
     } catch {}
   }
   
