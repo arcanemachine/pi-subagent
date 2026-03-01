@@ -415,6 +415,7 @@ export default function (pi: ExtensionAPI) {
             }
           }
           updateSubAgentStatus();
+          updateWatchWidget(); // Clean up pruned agents from widget
           ctx.ui.notify(`Pruned ${pruned} completed sub-agents`, "info");
           break;
         }
