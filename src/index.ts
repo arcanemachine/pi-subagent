@@ -195,9 +195,12 @@ function updateWatchWidget() {
     }
   }
 
-  // If cleanup removed all agents, clear widget
+  // If cleanup removed all agents, show empty state
   if (watchedAgentIds.size === 0) {
-    currentCtx.ui.setWidget("subagent-watch", undefined);
+    const emptyMessage = watchAllMode 
+      ? "👁 Watching all sub-agents\n────────────────────────────────────────\nNo sub-agents running"
+      : "👁 Watching all sub-agents\n────────────────────────────────────────\nNone selected";
+    currentCtx.ui.setWidget("subagent-watch", emptyMessage.split('\n'));
     return;
   }
 
