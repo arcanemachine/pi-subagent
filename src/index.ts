@@ -18,6 +18,7 @@ const activeAgents = new Map<string, SubAgent>();
 let currentCtx: ExtensionContext | null = null;
 let watchedAgentIds: Set<string> = new Set();
 let nextAgentId = 1;
+let watchAllMode = false;         // True when watching all agents (auto-add new ones)
 
 // Widget sizing config (tweakable)
 const BASE_BUDGET = 10;           // Minimum lines for 1-2 agents
@@ -120,6 +121,13 @@ function spawnSubAgent(task: string): SubAgent {
   proc.stdin?.write(prompt + "\n");
 
   activeAgents.set(id, agent);
+  
+  // Auto-add to watch list if in watch-all mode
+  if (watchAllMode) {
+    watchedAgentIds.add(id);
+    updateWatchWidget();
+  }
+  
   updateSubAgentStatus();
   return agent;
 }
@@ -412,6 +420,7 @@ export default function (pi: ExtensionAPI) {
         case "show":
           if (!subArgs) {
             // No ID provided, watch all
+            watchAllMode = true;
             for (const [id] of activeAgents) {
               watchedAgentIds.add(id);
             }
@@ -419,6 +428,8 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify("Watching all sub-agents", "info");
             return;
           }
+          // Watching specific agent, disable watch-all mode
+          watchAllMode = false;
           if (!activeAgents.has(subArgs)) {
             ctx.ui.notify(`Sub-agent ${subArgs} not found`, "error");
             return;
@@ -431,11 +442,14 @@ export default function (pi: ExtensionAPI) {
         case "hide":
           if (!subArgs) {
             // No ID provided, hide all
+            watchAllMode = false;
             watchedAgentIds.clear();
             updateWatchWidget();
             ctx.ui.notify("Stopped watching all sub-agents", "info");
             return;
           }
+          // Hiding specific agent, disable watch-all mode
+          watchAllMode = false;
           watchedAgentIds.delete(subArgs);
           updateWatchWidget();
           ctx.ui.notify(`Stopped watching sub-agent ${subArgs}`, "info");
@@ -616,8 +630,9 @@ export default function (pi: ExtensionAPI) {
       }
       activeAgents.clear();
       updateSubAgentStatus();
-      // Clear watch list and widget
+      // Clear watch list, widget, and watch-all mode
       watchedAgentIds.clear();
+      watchAllMode = false;
       updateWatchWidget();
     }
   });
