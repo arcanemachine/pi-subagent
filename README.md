@@ -33,6 +33,8 @@ cd pi-subagent
 pi install /path/to/pi-subagent
 ```
 
+No local `npm install` is required for normal usage.
+
 Or use a symlink for development:
 
 ```bash
