@@ -57,9 +57,50 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 
 ### Tools
 
-- `spawn_subagent` - Spawn a single sub-agent (optional `model`; defaults to current session model)
+- `spawn_subagent` - Spawn a single sub-agent (optional `model`)
 - `subagent_report` - Get detailed report
-- `spawn_parallel` - Spawn multiple sub-agents and wait for all (optional `model`; defaults to current session model)
+- `spawn_parallel` - Spawn multiple sub-agents and wait for all (optional `model`)
+
+#### Model resolution behavior
+
+Sub-agent model selection uses this precedence:
+
+1. Tool parameter `model` (explicit per-call override)
+2. `settings.json` key `"pi-subagent".model` (global/project override)
+3. Current session model
+
+If none of the above is available, pi falls back to its normal model resolution.
+
+`"pi-subagent".model` must be an actual model override string (for example `"openai/gpt-5.3-codex"` or another valid model pattern). There is no special `"current"` value for this setting.
+
+### Configuration (`settings.json`)
+
+Use the main pi settings files:
+
+- Global: `~/.pi/agent/settings.json`
+- Project: `.pi/settings.json`
+
+Project settings override global settings.
+
+Example (global):
+
+```json
+{
+  "pi-subagent": {
+    "model": "openai/gpt-5.3-codex"
+  }
+}
+```
+
+Example (project override):
+
+```json
+{
+  "pi-subagent": {
+    "model": "anthropic/claude-sonnet-4-5"
+  }
+}
+```
 
 ### Live Widget
 

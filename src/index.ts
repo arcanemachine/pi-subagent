@@ -2,7 +2,10 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { spawn, ChildProcess } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 interface SubAgent {
   id: string;
@@ -13,8 +16,10 @@ interface SubAgent {
   output: string[];
   startTime: number;
   endTime?: number;
+  exitCode?: number;
   currentTool?: string;
   lastActivity: number;
+  receivedEvent: boolean;
 }
 
 const activeAgents = new Map<string, SubAgent>();
@@ -22,6 +27,51 @@ let currentCtx: ExtensionContext | null = null;
 let watchedAgentIds: Set<string> = new Set();
 let nextAgentId = 1;
 let watchAllMode = false; // True when watching all agents (auto-add new ones)
+
+type PiSubagentSettings = {
+  model?: string;
+};
+
+function readJsonFile(path: string): Record<string, unknown> {
+  if (!existsSync(path)) return {};
+
+  try {
+    const raw = readFileSync(path, "utf-8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function getPiSubagentSettings(cwd: string): PiSubagentSettings {
+  const globalSettingsPath = join(getAgentDir(), "settings.json");
+  const projectSettingsPath = join(cwd, ".pi", "settings.json");
+
+  const globalSettings = readJsonFile(globalSettingsPath);
+  const projectSettings = readJsonFile(projectSettingsPath);
+
+  const globalSubagent = globalSettings["pi-subagent"];
+  const projectSubagent = projectSettings["pi-subagent"];
+
+  const globalModelValue =
+    globalSubagent && typeof globalSubagent === "object"
+      ? (globalSubagent as Record<string, unknown>).model
+      : undefined;
+  const globalModel =
+    typeof globalModelValue === "string" ? globalModelValue : undefined;
+
+  const projectModelValue =
+    projectSubagent && typeof projectSubagent === "object"
+      ? (projectSubagent as Record<string, unknown>).model
+      : undefined;
+  const projectModel =
+    typeof projectModelValue === "string" ? projectModelValue : undefined;
+
+  return {
+    model: projectModel ?? globalModel,
+  };
+}
 
 function getCurrentModelId(
   ctx: ExtensionContext | null | undefined,
@@ -34,7 +84,15 @@ function resolveSubAgentModel(
   requestedModel: string | undefined,
   ctx: ExtensionContext | null | undefined,
 ): string | undefined {
-  return requestedModel || getCurrentModelId(ctx);
+  const explicitModel = requestedModel?.trim();
+  if (explicitModel) return explicitModel;
+
+  const configModel = getPiSubagentSettings(
+    ctx?.cwd ?? process.cwd(),
+  ).model?.trim();
+  if (configModel) return configModel;
+
+  return getCurrentModelId(ctx);
 }
 
 function spawnSubAgent(task: string, model?: string): SubAgent {
@@ -64,6 +122,7 @@ function spawnSubAgent(task: string, model?: string): SubAgent {
     output: [],
     startTime: Date.now(),
     lastActivity: Date.now(),
+    receivedEvent: false,
   };
 
   // Handle stdout (JSON events)
@@ -80,6 +139,7 @@ function spawnSubAgent(task: string, model?: string): SubAgent {
 
       try {
         const event = JSON.parse(line);
+        agent.receivedEvent = true;
 
         // Track what the sub-agent is currently doing
         if (event.type === "tool_execution_start") {
@@ -122,10 +182,12 @@ function spawnSubAgent(task: string, model?: string): SubAgent {
   // Handle stderr
   proc.stderr?.on("data", (data: Buffer) => {
     agent.output.push(`[stderr]: ${data.toString().trim()}`);
+    agent.lastActivity = Date.now();
   });
 
   // Handle process exit
   proc.on("exit", (code) => {
+    agent.exitCode = code ?? undefined;
     if (code !== 0 && agent.status !== "completed") {
       agent.status = "error";
       agent.endTime = Date.now();
@@ -261,11 +323,18 @@ function updateWatchWidget() {
           ? "✓"
           : "✗";
 
+    const noResponseYet =
+      (agent.status === "starting" || agent.status === "running") &&
+      !agent.receivedEvent &&
+      Date.now() - agent.startTime > 5000;
+
     if (compactMode) {
       // Compact: one line per agent
       const toolInfo = agent.currentTool
         ? ` | ${agent.currentTool.slice(0, 40)}`
-        : "";
+        : noResponseYet
+          ? " | no response yet"
+          : "";
       widgetLines.push(
         `${statusIcon} ${id} ${agent.status} ${duration}s${toolInfo}`,
       );
@@ -275,6 +344,10 @@ function updateWatchWidget() {
       widgetLines.push(
         `Task: ${agent.task.slice(0, 50)}${agent.task.length > 50 ? "..." : ""}`,
       );
+
+      if (noResponseYet) {
+        widgetLines.push("⚠ No response from sub-agent process yet");
+      }
 
       const transcriptLines = buildTranscriptLines(agent, 5);
       if (transcriptLines.length > 0) {
@@ -354,6 +427,28 @@ function getAgentReport(id: string): string {
     transcript.push(...fallbackLines);
   }
 
+  const noResponseEver =
+    !agent.receivedEvent &&
+    (agent.status === "completed" || agent.status === "error");
+
+  const noResponseYet =
+    !agent.receivedEvent &&
+    (agent.status === "starting" || agent.status === "running");
+
+  const diagnostics: string[] = [];
+
+  if (noResponseYet) {
+    diagnostics.push(
+      "⚠ No response from the sub-agent process yet. The process may still be starting or blocked.",
+    );
+  }
+
+  if (noResponseEver) {
+    diagnostics.push(
+      "⚠ The sub-agent process exited without emitting any events. This often indicates startup or model-resolution failures.",
+    );
+  }
+
   return `
 ## Sub-Agent ${id}
 
@@ -361,6 +456,10 @@ function getAgentReport(id: string): string {
 **Model:** ${agent.model || "(plugin default)"}
 **Status:** ${agent.status}
 **Duration:** ${duration}s
+**Exit code:** ${agent.exitCode ?? "(running)"}
+
+### Diagnostics
+${diagnostics.join("\n\n") || "(none)"}
 
 ### Transcript
 ${transcript.join("\n\n") || "(no activity yet)"}
@@ -551,7 +650,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Spawn a sub-agent to work on a task in parallel. " +
       "Set `model` to choose the model for this sub-agent (pattern or provider/model). " +
-      "If `model` is omitted, the current session model is used by default. " +
+      "If `model` is omitted, settings key `pi-subagent.model` is used when present; otherwise current session model is used. " +
       "The sub-agent will appear in the active agents widget. " +
       "Use subagent_report to get full details when done.",
     parameters: {
@@ -564,7 +663,7 @@ export default function (pi: ExtensionAPI) {
         model: {
           type: "string",
           description:
-            "Model pattern or provider/model for this sub-agent. Defaults to current model.",
+            "Model pattern or provider/model for this sub-agent. Overrides pi-subagent.model and current session model.",
         },
       },
       required: ["task"],
@@ -644,7 +743,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Spawn multiple sub-agents to work on different tasks in parallel. " +
       "Set `model` to choose the model for all spawned sub-agents (pattern or provider/model). " +
-      "If `model` is omitted, the current session model is used by default. " +
+      "If `model` is omitted, settings key `pi-subagent.model` is used when present; otherwise current session model is used. " +
       "Returns when all complete. Great for analyzing multiple files or components.",
     parameters: {
       type: "object",
@@ -657,7 +756,7 @@ export default function (pi: ExtensionAPI) {
         model: {
           type: "string",
           description:
-            "Model pattern or provider/model for all spawned sub-agents. Defaults to current model.",
+            "Model pattern or provider/model for all spawned sub-agents. Overrides pi-subagent.model and current session model.",
         },
         timeout_ms: {
           type: "number",
