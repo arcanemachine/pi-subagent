@@ -57,9 +57,9 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 
 ### Tools
 
-- `spawn_subagent` - Spawn a single sub-agent
+- `spawn_subagent` - Spawn a single sub-agent (optional `model`; defaults to current session model)
 - `subagent_report` - Get detailed report
-- `spawn_parallel` - Spawn multiple sub-agents and wait for all
+- `spawn_parallel` - Spawn multiple sub-agents and wait for all (optional `model`; defaults to current session model)
 
 ### Live Widget
 
@@ -77,6 +77,7 @@ Task: review PR...
 ```
 
 The widget shows:
+
 - Status icon (⏳ running / ✓ completed / ✗ error)
 - Duration
 - Task description

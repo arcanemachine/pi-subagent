@@ -8,6 +8,7 @@ interface SubAgent {
   id: string;
   process: ChildProcess;
   task: string;
+  model?: string;
   status: "starting" | "running" | "completed" | "error";
   output: string[];
   startTime: number;
@@ -22,10 +23,29 @@ let watchedAgentIds: Set<string> = new Set();
 let nextAgentId = 1;
 let watchAllMode = false; // True when watching all agents (auto-add new ones)
 
-function spawnSubAgent(task: string): SubAgent {
+function getCurrentModelId(
+  ctx: ExtensionContext | null | undefined,
+): string | undefined {
+  if (!ctx?.model) return undefined;
+  return `${ctx.model.provider}/${ctx.model.id}`;
+}
+
+function resolveSubAgentModel(
+  requestedModel: string | undefined,
+  ctx: ExtensionContext | null | undefined,
+): string | undefined {
+  return requestedModel || getCurrentModelId(ctx);
+}
+
+function spawnSubAgent(task: string, model?: string): SubAgent {
   const id = String(nextAgentId++);
 
-  const proc = spawn("pi", ["--mode", "rpc", "--no-session"], {
+  const args = ["--mode", "rpc", "--no-session"];
+  if (model) {
+    args.push("--model", model);
+  }
+
+  const proc = spawn("pi", args, {
     stdio: ["pipe", "pipe", "pipe"],
     detached: false,
   });
@@ -39,6 +59,7 @@ function spawnSubAgent(task: string): SubAgent {
     id,
     process: proc,
     task,
+    model,
     status: "starting",
     output: [],
     startTime: Date.now(),
@@ -324,10 +345,20 @@ function getAgentReport(id: string): string {
     ? Math.floor((agent.endTime - agent.startTime) / 1000)
     : Math.floor((Date.now() - agent.startTime) / 1000);
 
+  if (transcript.length === 0 && agent.output.length > 0) {
+    const fallbackLines = agent.output
+      .slice(-8)
+      .map(
+        (line) => `📄 ${line.slice(0, 200)}${line.length > 200 ? "..." : ""}`,
+      );
+    transcript.push(...fallbackLines);
+  }
+
   return `
 ## Sub-Agent ${id}
 
 **Task:** ${agent.task}
+**Model:** ${agent.model || "(plugin default)"}
 **Status:** ${agent.status}
 **Duration:** ${duration}s
 
@@ -380,13 +411,17 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify("Usage: /subagent spawn <task>", "error");
             return;
           }
-          const agent = spawnSubAgent(subArgs);
+          const model = resolveSubAgentModel(undefined, ctx);
+          const agent = spawnSubAgent(subArgs, model);
           ctx.ui.notify(`Spawned sub-agent ${agent.id}`, "info");
 
           // Send a message to the conversation showing what was spawned
           pi.sendMessage({
             customType: "subagent-spawned",
-            content: `🚀 Spawned sub-agent **${agent.id}**\nTask: ${agent.task}`,
+            content:
+              `🚀 Spawned sub-agent **${agent.id}**\n` +
+              `Task: ${agent.task}\n` +
+              `Model: ${agent.model || "(plugin default)"}`,
             display: true,
           });
           break;
@@ -515,6 +550,8 @@ export default function (pi: ExtensionAPI) {
     label: "Spawn Sub-Agent",
     description:
       "Spawn a sub-agent to work on a task in parallel. " +
+      "Set `model` to choose the model for this sub-agent (pattern or provider/model). " +
+      "If `model` is omitted, the current session model is used by default. " +
       "The sub-agent will appear in the active agents widget. " +
       "Use subagent_report to get full details when done.",
     parameters: {
@@ -524,11 +561,23 @@ export default function (pi: ExtensionAPI) {
           type: "string",
           description: "Clear, specific task for the sub-agent to complete",
         },
+        model: {
+          type: "string",
+          description:
+            "Model pattern or provider/model for this sub-agent. Defaults to current model.",
+        },
       },
       required: ["task"],
     } as any,
-    async execute(toolCallId, params: { task: string }, signal, onUpdate, ctx) {
-      const agent = spawnSubAgent(params.task);
+    async execute(
+      toolCallId,
+      params: { task: string; model?: string },
+      signal,
+      onUpdate,
+      ctx,
+    ) {
+      const model = resolveSubAgentModel(params.model, ctx);
+      const agent = spawnSubAgent(params.task, model);
 
       return {
         content: [
@@ -536,14 +585,15 @@ export default function (pi: ExtensionAPI) {
             type: "text",
             text:
               `🚀 Spawned sub-agent **${agent.id}**\n` +
-              `Task: ${agent.task}\n\n` +
+              `Task: ${agent.task}\n` +
+              `Model: ${agent.model || "(plugin default)"}\n\n` +
               `The sub-agent is now running in parallel. You can:\n` +
               `- Watch its progress in the widget above\n` +
               `- Run \`/subagent report ${agent.id}\` to see full details\n` +
               `- Spawn more sub-agents for parallel work`,
           },
         ],
-        details: { agentId: agent.id, task: agent.task },
+        details: { agentId: agent.id, task: agent.task, model: agent.model },
       };
     },
   });
@@ -593,6 +643,8 @@ export default function (pi: ExtensionAPI) {
     label: "Spawn Parallel Sub-Agents",
     description:
       "Spawn multiple sub-agents to work on different tasks in parallel. " +
+      "Set `model` to choose the model for all spawned sub-agents (pattern or provider/model). " +
+      "If `model` is omitted, the current session model is used by default. " +
       "Returns when all complete. Great for analyzing multiple files or components.",
     parameters: {
       type: "object",
@@ -601,6 +653,11 @@ export default function (pi: ExtensionAPI) {
           type: "array",
           items: { type: "string" },
           description: "Array of tasks, one per sub-agent",
+        },
+        model: {
+          type: "string",
+          description:
+            "Model pattern or provider/model for all spawned sub-agents. Defaults to current model.",
         },
         timeout_ms: {
           type: "number",
@@ -612,16 +669,17 @@ export default function (pi: ExtensionAPI) {
     } as any,
     async execute(
       toolCallId,
-      params: { tasks: string[]; timeout_ms?: number },
+      params: { tasks: string[]; timeout_ms?: number; model?: string },
       signal,
       onUpdate,
       ctx,
     ) {
       const agents: SubAgent[] = [];
+      const model = resolveSubAgentModel(params.model, ctx);
 
       // Spawn all agents
       for (const task of params.tasks) {
-        agents.push(spawnSubAgent(task));
+        agents.push(spawnSubAgent(task, model));
       }
 
       onUpdate?.({
@@ -630,6 +688,7 @@ export default function (pi: ExtensionAPI) {
             type: "text",
             text:
               `Spawned ${agents.length} sub-agents:\n` +
+              `Model: ${model || "(plugin default)"}\n` +
               agents
                 .map((a) => `- ${a.id}: ${a.task.slice(0, 50)}...`)
                 .join("\n"),
@@ -679,6 +738,7 @@ export default function (pi: ExtensionAPI) {
           },
         ],
         details: {
+          model,
           agents: agents.map((a) => ({ id: a.id, status: a.status })),
         },
       };
