@@ -28,6 +28,9 @@ let watchedAgentIds: Set<string> = new Set();
 let nextAgentId = 1;
 let watchAllMode = false; // True when watching all agents (auto-add new ones)
 
+const DEFAULT_REPORT_COUNT = 3;
+const MAX_REPORT_COUNT = 50;
+
 type PiSubagentSettings = {
   model?: string;
 };
@@ -278,6 +281,82 @@ function buildTranscriptLines(
   return transcript.slice(-maxLines);
 }
 
+function normalizeReportCount(rawCount: number | undefined): number {
+  if (rawCount === undefined) return DEFAULT_REPORT_COUNT;
+  if (!Number.isFinite(rawCount)) return DEFAULT_REPORT_COUNT;
+
+  const count = Math.trunc(rawCount);
+  if (count < 1) return DEFAULT_REPORT_COUNT;
+  return Math.min(count, MAX_REPORT_COUNT);
+}
+
+function parseReportCountFromArg(rawCount: string | undefined): {
+  count: number;
+  error?: string;
+} {
+  if (!rawCount) return { count: DEFAULT_REPORT_COUNT };
+
+  const parsed = Number.parseInt(rawCount, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return {
+      count: DEFAULT_REPORT_COUNT,
+      error: "Count must be a positive integer",
+    };
+  }
+
+  return { count: Math.min(parsed, MAX_REPORT_COUNT) };
+}
+
+function buildReportEntries(agent: SubAgent): string[] {
+  const entries: string[] = [];
+  let currentMessage = "";
+
+  for (const line of agent.output) {
+    try {
+      const event = JSON.parse(line);
+
+      if (event.type === "tool_execution_start") {
+        if (currentMessage.trim()) {
+          entries.push(`💬 ${currentMessage.trim()}`);
+          currentMessage = "";
+        }
+
+        entries.push(
+          `🔧 ${event.toolName}: ${JSON.stringify(event.args).slice(0, 100)}`,
+        );
+      } else if (
+        event.type === "message_update" &&
+        event.assistantMessageEvent
+      ) {
+        const delta = event.assistantMessageEvent;
+        if (delta.type === "text_delta") {
+          currentMessage += delta.delta;
+        } else if (delta.type === "toolcall_start") {
+          if (currentMessage.trim()) {
+            entries.push(`💬 ${currentMessage.trim()}`);
+            currentMessage = "";
+          }
+        }
+      }
+    } catch {}
+  }
+
+  if (currentMessage.trim()) {
+    entries.push(`💬 ${currentMessage.trim()}`);
+  }
+
+  if (entries.length === 0 && agent.output.length > 0) {
+    const fallbackLines = agent.output
+      .slice(-8)
+      .map(
+        (line) => `📄 ${line.slice(0, 200)}${line.length > 200 ? "..." : ""}`,
+      );
+    entries.push(...fallbackLines);
+  }
+
+  return entries;
+}
+
 function updateWatchWidget() {
   if (!currentCtx) return;
 
@@ -377,9 +456,11 @@ async function waitForSubAgent(
   return agent.status === "completed";
 }
 
-function getAgentReport(id: string): string {
+function getAgentReport(id: string, requestedCount?: number): string {
   const agent = activeAgents.get(id);
   if (!agent) return `Agent ${id} not found`;
+
+  const count = normalizeReportCount(requestedCount);
 
   const duration = agent.endTime
     ? Math.floor((agent.endTime - agent.startTime) / 1000)
@@ -407,76 +488,22 @@ function getAgentReport(id: string): string {
     );
   }
 
-  const isRunning = agent.status === "starting" || agent.status === "running";
-
-  if (isRunning) {
-    const currentTool = agent.currentTool || "(idle)";
-    return `
-## Sub-Agent ${id}
-
-**Task:** ${agent.task}
-**Model:** ${agent.model || "(plugin default)"}
-**Status:** ${agent.status}
-**Duration:** ${duration}s
-**Exit code:** (running)
-**Current tool:** ${currentTool}
-
-### Diagnostics
-${diagnostics.join("\n\n") || "(none)"}
-
-### Note
-Sub-agent is still running. Run report again after completion for full transcript output.
-`;
-  }
-
-  // Build a readable transcript of what the sub-agent did
-  const transcript: string[] = [];
-  let currentMessage = "";
-
-  for (const line of agent.output) {
-    try {
-      const event = JSON.parse(line);
-
-      if (event.type === "tool_execution_start") {
-        transcript.push(
-          `🔧 ${event.toolName}: ${JSON.stringify(event.args).slice(0, 100)}`,
-        );
-      } else if (
-        event.type === "message_update" &&
-        event.assistantMessageEvent
-      ) {
-        const delta = event.assistantMessageEvent;
-        if (delta.type === "text_delta") {
-          currentMessage += delta.delta;
-        } else if (delta.type === "toolcall_start") {
-          if (currentMessage.trim()) {
-            transcript.push(`💬 ${currentMessage.trim()}`);
-            currentMessage = "";
-          }
-        }
-      }
-    } catch {}
-  }
-
-  if (currentMessage.trim()) {
-    transcript.push(`💬 ${currentMessage.trim()}`);
-  }
-
-  if (transcript.length === 0 && agent.output.length > 0) {
-    const fallbackLines = agent.output
-      .slice(-8)
-      .map(
-        (line) => `📄 ${line.slice(0, 200)}${line.length > 200 ? "..." : ""}`,
-      );
-    transcript.push(...fallbackLines);
-  }
+  const entries = buildReportEntries(agent);
+  const recentEntries = entries.slice(-count);
 
   let exitCodeText = "(unknown)";
   if (agent.exitCode !== undefined) {
     exitCodeText = String(agent.exitCode);
+  } else if (agent.status === "starting" || agent.status === "running") {
+    exitCodeText = "(running)";
   } else if (agent.status === "completed" || agent.status === "error") {
     exitCodeText = "(not yet reported)";
   }
+
+  const currentTool =
+    agent.status === "starting" || agent.status === "running"
+      ? agent.currentTool || "(idle)"
+      : undefined;
 
   return `
 ## Sub-Agent ${id}
@@ -485,13 +512,13 @@ Sub-agent is still running. Run report again after completion for full transcrip
 **Model:** ${agent.model || "(plugin default)"}
 **Status:** ${agent.status}
 **Duration:** ${duration}s
-**Exit code:** ${exitCodeText}
+**Exit code:** ${exitCodeText}${currentTool ? `\n**Current tool:** ${currentTool}` : ""}
 
 ### Diagnostics
 ${diagnostics.join("\n\n") || "(none)"}
 
-### Transcript
-${transcript.join("\n\n") || "(no activity yet)"}
+### Recent activity (last ${count})
+${recentEntries.join("\n\n") || "(no activity yet)"}
 `;
 }
 
@@ -514,7 +541,7 @@ export default function (pi: ExtensionAPI) {
         { value: "spawn", label: "spawn <task> — Spawn a new sub-agent" },
         {
           value: "report",
-          label: "report <id> — Get transcript of agent activity",
+          label: "report <id> [count] — Get recent sub-agent activity",
         },
         { value: "list", label: "list — List all sub-agents" },
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
@@ -525,7 +552,10 @@ export default function (pi: ExtensionAPI) {
         },
         { value: "show", label: "show [id] — Watch sub-agent (no ID = all)" },
         { value: "hide", label: "hide [id] — Stop watching (no ID = all)" },
-        { value: "append", label: "append <id> — Add report to context" },
+        {
+          value: "append",
+          label: "append <id> [count] — Add report to context",
+        },
       ];
       return items.filter((i) => i.value.startsWith(prefix));
     },
@@ -554,31 +584,56 @@ export default function (pi: ExtensionAPI) {
           });
           break;
 
-        case "report":
-          if (!subArgs) {
-            ctx.ui.notify("Usage: /subagent report <id>", "error");
+        case "report": {
+          const reportId = rest[0];
+          const { count, error } = parseReportCountFromArg(rest[1]);
+
+          if (!reportId) {
+            ctx.ui.notify("Usage: /subagent report <id> [count]", "error");
             return;
           }
-          const report = getAgentReport(subArgs);
+          if (error) {
+            ctx.ui.notify(
+              `${error}. Using default count ${DEFAULT_REPORT_COUNT}.`,
+              "warning",
+            );
+          }
+
+          const report = getAgentReport(reportId, count);
           // Just display to user, don't add to context
           const separator = "─".repeat(40);
           ctx.ui.notify(`${separator}\n${report}\n${separator}`, "info");
           break;
+        }
 
-        case "append":
-          if (!subArgs) {
-            ctx.ui.notify("Usage: /subagent append <id>", "error");
+        case "append": {
+          const reportId = rest[0];
+          const { count, error } = parseReportCountFromArg(rest[1]);
+
+          if (!reportId) {
+            ctx.ui.notify("Usage: /subagent append <id> [count]", "error");
             return;
           }
-          const reportToAppend = getAgentReport(subArgs);
+          if (error) {
+            ctx.ui.notify(
+              `${error}. Using default count ${DEFAULT_REPORT_COUNT}.`,
+              "warning",
+            );
+          }
+
+          const reportToAppend = getAgentReport(reportId, count);
           // Send to conversation so LLM can see it
           pi.sendMessage({
             customType: "subagent-report",
             content: reportToAppend,
             display: true,
           });
-          ctx.ui.notify(`Report for ${subArgs} added to conversation`, "info");
+          ctx.ui.notify(
+            `Report for ${reportId} (last ${count}) added to conversation`,
+            "info",
+          );
           break;
+        }
 
         case "list":
           if (activeAgents.size === 0) {
@@ -732,8 +787,8 @@ export default function (pi: ExtensionAPI) {
     label: "Sub-Agent Report",
     description:
       "Get a sub-agent report. " +
-      "If the sub-agent is still running, returns a concise status snapshot. " +
-      "After completion, returns a full transcript of tool calls, messages, and final results.",
+      "Returns recent sub-agent activity entries. " +
+      "Use `count` to choose how many entries to include (default: 3).",
     parameters: {
       type: "object",
       properties: {
@@ -741,17 +796,26 @@ export default function (pi: ExtensionAPI) {
           type: "string",
           description: "The sub-agent ID to get the report for",
         },
+        count: {
+          type: "number",
+          description:
+            "How many recent activity entries to include. Defaults to 3.",
+          default: DEFAULT_REPORT_COUNT,
+        },
       },
       required: ["agent_id"],
     } as any,
     async execute(
       toolCallId,
-      params: { agent_id: string },
+      params: { agent_id: string; count?: number },
       signal,
       onUpdate,
       ctx,
     ) {
-      const report = getAgentReport(params.agent_id);
+      const report = getAgentReport(
+        params.agent_id,
+        normalizeReportCount(params.count),
+      );
 
       return {
         content: [
