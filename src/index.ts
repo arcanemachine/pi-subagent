@@ -381,6 +381,54 @@ function getAgentReport(id: string): string {
   const agent = activeAgents.get(id);
   if (!agent) return `Agent ${id} not found`;
 
+  const duration = agent.endTime
+    ? Math.floor((agent.endTime - agent.startTime) / 1000)
+    : Math.floor((Date.now() - agent.startTime) / 1000);
+
+  const noResponseEver =
+    !agent.receivedEvent &&
+    (agent.status === "completed" || agent.status === "error");
+
+  const noResponseYet =
+    !agent.receivedEvent &&
+    (agent.status === "starting" || agent.status === "running");
+
+  const diagnostics: string[] = [];
+
+  if (noResponseYet) {
+    diagnostics.push(
+      "⚠ No response from the sub-agent process yet. The process may still be starting or blocked.",
+    );
+  }
+
+  if (noResponseEver) {
+    diagnostics.push(
+      "⚠ The sub-agent process exited without emitting any events. This often indicates startup or model-resolution failures.",
+    );
+  }
+
+  const isRunning = agent.status === "starting" || agent.status === "running";
+
+  if (isRunning) {
+    const currentTool = agent.currentTool || "(idle)";
+    return `
+## Sub-Agent ${id}
+
+**Task:** ${agent.task}
+**Model:** ${agent.model || "(plugin default)"}
+**Status:** ${agent.status}
+**Duration:** ${duration}s
+**Exit code:** (running)
+**Current tool:** ${currentTool}
+
+### Diagnostics
+${diagnostics.join("\n\n") || "(none)"}
+
+### Note
+Sub-agent is still running. Run report again after completion for full transcript output.
+`;
+  }
+
   // Build a readable transcript of what the sub-agent did
   const transcript: string[] = [];
   let currentMessage = "";
@@ -414,10 +462,6 @@ function getAgentReport(id: string): string {
     transcript.push(`💬 ${currentMessage.trim()}`);
   }
 
-  const duration = agent.endTime
-    ? Math.floor((agent.endTime - agent.startTime) / 1000)
-    : Math.floor((Date.now() - agent.startTime) / 1000);
-
   if (transcript.length === 0 && agent.output.length > 0) {
     const fallbackLines = agent.output
       .slice(-8)
@@ -427,26 +471,11 @@ function getAgentReport(id: string): string {
     transcript.push(...fallbackLines);
   }
 
-  const noResponseEver =
-    !agent.receivedEvent &&
-    (agent.status === "completed" || agent.status === "error");
-
-  const noResponseYet =
-    !agent.receivedEvent &&
-    (agent.status === "starting" || agent.status === "running");
-
-  const diagnostics: string[] = [];
-
-  if (noResponseYet) {
-    diagnostics.push(
-      "⚠ No response from the sub-agent process yet. The process may still be starting or blocked.",
-    );
-  }
-
-  if (noResponseEver) {
-    diagnostics.push(
-      "⚠ The sub-agent process exited without emitting any events. This often indicates startup or model-resolution failures.",
-    );
+  let exitCodeText = "(unknown)";
+  if (agent.exitCode !== undefined) {
+    exitCodeText = String(agent.exitCode);
+  } else if (agent.status === "completed" || agent.status === "error") {
+    exitCodeText = "(not yet reported)";
   }
 
   return `
@@ -456,7 +485,7 @@ function getAgentReport(id: string): string {
 **Model:** ${agent.model || "(plugin default)"}
 **Status:** ${agent.status}
 **Duration:** ${duration}s
-**Exit code:** ${agent.exitCode ?? "(running)"}
+**Exit code:** ${exitCodeText}
 
 ### Diagnostics
 ${diagnostics.join("\n\n") || "(none)"}
@@ -702,9 +731,9 @@ export default function (pi: ExtensionAPI) {
     name: "subagent_report",
     label: "Sub-Agent Report",
     description:
-      "Get a full transcript of a sub-agent's activity. " +
-      "Shows all tool calls, messages, and final results. " +
-      "Use this to understand what a sub-agent accomplished.",
+      "Get a sub-agent report. " +
+      "If the sub-agent is still running, returns a concise status snapshot. " +
+      "After completion, returns a full transcript of tool calls, messages, and final results.",
     parameters: {
       type: "object",
       properties: {

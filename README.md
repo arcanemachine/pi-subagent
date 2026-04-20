@@ -46,7 +46,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 ### Commands
 
 - `/subagent spawn <task>` - Spawn a new sub-agent
-- `/subagent report <id>` - View transcript (user only, not added to context)
+- `/subagent report <id>` - View report (concise status while running, full transcript after completion)
 - `/subagent append <id>` - View transcript and add to conversation context
 - `/subagent list` - List all sub-agents
 - `/subagent kill <id>` - Kill a specific sub-agent
@@ -58,7 +58,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 ### Tools
 
 - `spawn_subagent` - Spawn a single sub-agent (optional `model`)
-- `subagent_report` - Get detailed report
+- `subagent_report` - Get report (concise status while running, full transcript after completion)
 - `spawn_parallel` - Spawn multiple sub-agents and wait for all (optional `model`)
 
 #### Model resolution behavior
