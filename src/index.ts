@@ -11,6 +11,7 @@ interface SubAgent {
   id: string;
   process: ChildProcess;
   task: string;
+  agentType?: string;
   model?: string;
   status: "starting" | "running" | "completed" | "error";
   output: string[];
@@ -27,12 +28,18 @@ let currentCtx: ExtensionContext | null = null;
 let watchedAgentIds: Set<string> = new Set();
 let nextAgentId = 1;
 let watchAllMode = false; // True when watching all agents (auto-add new ones)
+let configuredAgents: Record<string, SubagentProfile> = {};
 
 const DEFAULT_REPORT_COUNT = 3;
 const MAX_REPORT_COUNT = 50;
 
+type SubagentProfile = {
+  model: string;
+  when_to_use?: string;
+};
+
 type PiSubagentSettings = {
-  model?: string;
+  agents?: Record<string, SubagentProfile>;
 };
 
 function readJsonFile(path: string): Record<string, unknown> {
@@ -57,54 +64,91 @@ function getPiSubagentSettings(cwd: string): PiSubagentSettings {
   const globalSubagent = globalSettings["pi-subagent"];
   const projectSubagent = projectSettings["pi-subagent"];
 
-  const globalModelValue =
+  const globalAgentsValue =
     globalSubagent && typeof globalSubagent === "object"
-      ? (globalSubagent as Record<string, unknown>).model
+      ? (globalSubagent as Record<string, unknown>).agents
       : undefined;
-  const globalModel =
-    typeof globalModelValue === "string" ? globalModelValue : undefined;
 
-  const projectModelValue =
+  const projectAgentsValue =
     projectSubagent && typeof projectSubagent === "object"
-      ? (projectSubagent as Record<string, unknown>).model
+      ? (projectSubagent as Record<string, unknown>).agents
       : undefined;
-  const projectModel =
-    typeof projectModelValue === "string" ? projectModelValue : undefined;
+
+  const globalAgents =
+    globalAgentsValue && typeof globalAgentsValue === "object"
+      ? (globalAgentsValue as Record<string, unknown>)
+      : {};
+
+  const projectAgents =
+    projectAgentsValue && typeof projectAgentsValue === "object"
+      ? (projectAgentsValue as Record<string, unknown>)
+      : {};
+
+  const mergedAgents: Record<string, SubagentProfile> = {};
+
+  for (const [agentName, agentConfig] of [
+    ...Object.entries(globalAgents),
+    ...Object.entries(projectAgents),
+  ]) {
+    if (!agentConfig || typeof agentConfig !== "object") continue;
+
+    const configObject = agentConfig as Record<string, unknown>;
+    const modelValue = configObject.model;
+    const whenToUseValue = configObject.when_to_use;
+    const model = typeof modelValue === "string" ? modelValue.trim() : "";
+
+    if (!model) continue;
+
+    const whenToUse =
+      typeof whenToUseValue === "string" ? whenToUseValue.trim() : undefined;
+
+    mergedAgents[agentName] = {
+      model,
+      ...(whenToUse ? { when_to_use: whenToUse } : {}),
+    };
+  }
 
   return {
-    model: projectModel ?? globalModel,
+    agents: mergedAgents,
   };
 }
 
-function getCurrentModelId(
-  ctx: ExtensionContext | null | undefined,
-): string | undefined {
-  if (!ctx?.model) return undefined;
-  return `${ctx.model.provider}/${ctx.model.id}`;
+function refreshConfiguredAgents(cwd: string): void {
+  configuredAgents = getPiSubagentSettings(cwd).agents || {};
 }
 
-function resolveSubAgentModel(
-  requestedModel: string | undefined,
+function resolveSubagentProfile(
+  agentName: string,
   ctx: ExtensionContext | null | undefined,
-): string | undefined {
-  const explicitModel = requestedModel?.trim();
-  if (explicitModel) return explicitModel;
+): SubagentProfile {
+  const normalizedAgentName = agentName.trim();
+  if (!normalizedAgentName) {
+    throw new Error("Missing agent type");
+  }
 
-  const configModel = getPiSubagentSettings(
-    ctx?.cwd ?? process.cwd(),
-  ).model?.trim();
-  if (configModel) return configModel;
+  refreshConfiguredAgents(ctx?.cwd ?? process.cwd());
+  const profile = configuredAgents[normalizedAgentName];
+  if (profile) return profile;
 
-  return getCurrentModelId(ctx);
+  const availableAgents = Object.keys(configuredAgents);
+  const suffix =
+    availableAgents.length > 0
+      ? ` Available agents: ${availableAgents.join(", ")}`
+      : " No agents configured in settings.";
+
+  throw new Error(
+    `Unknown sub-agent type \`${normalizedAgentName}\`.${suffix}`,
+  );
 }
 
-function spawnSubAgent(task: string, model?: string): SubAgent {
+function spawnSubAgent(
+  task: string,
+  model: string,
+  agentType: string,
+): SubAgent {
   const id = String(nextAgentId++);
 
-  const args = ["--mode", "rpc", "--no-session"];
-  if (model) {
-    args.push("--model", model);
-  }
+  const args = ["--mode", "rpc", "--no-session", "--model", model];
 
   const proc = spawn("pi", args, {
     stdio: ["pipe", "pipe", "pipe"],
@@ -120,6 +164,7 @@ function spawnSubAgent(task: string, model?: string): SubAgent {
     id,
     process: proc,
     task,
+    agentType,
     model,
     status: "starting",
     output: [],
@@ -512,7 +557,8 @@ function getAgentReport(id: string, requestedCount?: number): string {
 ## Sub-Agent ${id}
 
 **Task:** ${agent.task}
-**Model:** ${agent.model || "(plugin default)"}
+**Agent type:** ${agent.agentType || "(unknown)"}
+**Model:** ${agent.model || "(unknown)"}
 **Status:** ${agent.status}
 **Duration:** ${duration}s
 **Exit code:** ${exitCodeText}${currentTool ? `\n**Current tool:** ${currentTool}` : ""}
@@ -540,8 +586,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("subagent", {
     description: "Spawn and manage sub-agents",
     getArgumentCompletions: (prefix: string) => {
-      const items = [
-        { value: "spawn", label: "spawn <task> — Spawn a new sub-agent" },
+      const baseItems = [
         {
           value: "report",
           label: "report <id> [count] — Get recent sub-agent activity",
@@ -560,20 +605,52 @@ export default function (pi: ExtensionAPI) {
           label: "append <id> [count] — Add report to context",
         },
       ];
-      return items.filter((i) => i.value.startsWith(prefix));
+
+      const spawnItems = Object.entries(configuredAgents).map(
+        ([agentType, profile]) => ({
+          value: `spawn:${agentType}`,
+          label:
+            `spawn:${agentType} <task> — ` +
+            (profile.when_to_use || `Uses ${profile.model}`),
+        }),
+      );
+
+      if (prefix.startsWith("spawn:")) {
+        return spawnItems.filter((i) => i.value.startsWith(prefix));
+      }
+
+      if ("spawn:".startsWith(prefix)) {
+        return [{ value: "spawn:", label: "spawn:<agent> <task>" }];
+      }
+
+      return [...spawnItems, ...baseItems].filter((i) =>
+        i.value.startsWith(prefix),
+      );
     },
     handler: async (args: string, ctx) => {
-      const [subcommand, ...rest] = args.trim().split(/\s+/);
+      const trimmedArgs = args.trim();
+      if (!trimmedArgs) {
+        ctx.ui.notify(
+          "Usage: /subagent spawn:<agent>|report|append|list|kill|killall|prune|show|hide",
+          "error",
+        );
+        return;
+      }
+
+      const [subcommand, ...rest] = trimmedArgs.split(/\s+/);
       const subArgs = rest.join(" ");
 
-      switch (subcommand) {
-        case "spawn":
-          if (!subArgs) {
-            ctx.ui.notify("Usage: /subagent spawn <task>", "error");
-            return;
-          }
-          const model = resolveSubAgentModel(undefined, ctx);
-          const agent = spawnSubAgent(subArgs, model);
+      if (subcommand.startsWith("spawn:")) {
+        const agentType = subcommand.slice("spawn:".length).trim();
+
+        if (!agentType || !subArgs) {
+          ctx.ui.notify("Usage: /subagent spawn:<agent> <task>", "error");
+          return;
+        }
+
+        try {
+          const profile = resolveSubagentProfile(agentType, ctx);
+          const agent = spawnSubAgent(subArgs, profile.model, agentType);
           ctx.ui.notify(`Spawned sub-agent ${agent.id}`, "info");
 
           // Send a message to the conversation showing what was spawned
@@ -582,11 +659,21 @@ export default function (pi: ExtensionAPI) {
             content:
               `🚀 Spawned sub-agent **${agent.id}**\n` +
               `Task: ${agent.task}\n` +
-              `Model: ${agent.model || "(plugin default)"}`,
+              `Agent type: ${agent.agentType || "(unknown)"}\n` +
+              `Model: ${agent.model || "(unknown)"}`,
             display: true,
           });
-          break;
+        } catch (error: unknown) {
+          ctx.ui.notify(
+            error instanceof Error ? error.message : String(error),
+            "error",
+          );
+        }
 
+        return;
+      }
+
+      switch (subcommand) {
         case "report": {
           const reportId = rest[0];
           const { count, error } = parseReportCountFromArg(rest[1]);
@@ -643,7 +730,10 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify("No active sub-agents", "info");
           } else {
             const list = Array.from(activeAgents.entries())
-              .map(([id, a]) => `${id}: ${a.status}`)
+              .map(
+                ([id, a]) =>
+                  `${id}: ${a.status} | ${a.agentType || "unknown"} | ${a.model || "(unknown)"}`,
+              )
               .join("\n");
             ctx.ui.notify(`Active sub-agents:\n${list}`, "info");
           }
@@ -723,7 +813,7 @@ export default function (pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent {spawn|report|append|list|kill|killall|prune|show|hide} [args]",
+            "Usage: /subagent spawn:<agent> <task> | report|append|list|kill|killall|prune|show|hide",
             "error",
           );
       }
@@ -736,8 +826,7 @@ export default function (pi: ExtensionAPI) {
     label: "Spawn Sub-Agent",
     description:
       "Spawn a sub-agent to work on a task in parallel. " +
-      "Set `model` to choose the model for this sub-agent (pattern or provider/model). " +
-      "If `model` is omitted, settings key `pi-subagent.model` is used when present; otherwise current session model is used. " +
+      "`agent` is required and must match a configured key in settings `pi-subagent.agents`. " +
       "The sub-agent will appear in the active agents widget. " +
       "Use subagent_report to get full details when done.",
     parameters: {
@@ -747,23 +836,23 @@ export default function (pi: ExtensionAPI) {
           type: "string",
           description: "Clear, specific task for the sub-agent to complete",
         },
-        model: {
+        agent: {
           type: "string",
           description:
-            "Model pattern or provider/model for this sub-agent. Overrides pi-subagent.model and current session model.",
+            "Configured sub-agent type key from settings (for example: simple, smart, code-review)",
         },
       },
-      required: ["task"],
+      required: ["task", "agent"],
     } as any,
     async execute(
       toolCallId,
-      params: { task: string; model?: string },
+      params: { task: string; agent: string },
       signal,
       onUpdate,
       ctx,
     ) {
-      const model = resolveSubAgentModel(params.model, ctx);
-      const agent = spawnSubAgent(params.task, model);
+      const profile = resolveSubagentProfile(params.agent, ctx);
+      const agent = spawnSubAgent(params.task, profile.model, params.agent);
 
       return {
         content: [
@@ -772,14 +861,20 @@ export default function (pi: ExtensionAPI) {
             text:
               `🚀 Spawned sub-agent **${agent.id}**\n` +
               `Task: ${agent.task}\n` +
-              `Model: ${agent.model || "(plugin default)"}\n\n` +
+              `Agent type: ${agent.agentType || "(unknown)"}\n` +
+              `Model: ${agent.model || "(unknown)"}\n\n` +
               `The sub-agent is now running in parallel. You can:\n` +
               `- Watch its progress in the widget above\n` +
               `- Run \`/subagent report ${agent.id}\` to see full details\n` +
               `- Spawn more sub-agents for parallel work`,
           },
         ],
-        details: { agentId: agent.id, task: agent.task, model: agent.model },
+        details: {
+          agentId: agent.id,
+          task: agent.task,
+          agentType: agent.agentType,
+          model: agent.model,
+        },
       };
     },
   });
@@ -838,21 +933,29 @@ export default function (pi: ExtensionAPI) {
     label: "Spawn Parallel Sub-Agents",
     description:
       "Spawn multiple sub-agents to work on different tasks in parallel. " +
-      "Set `model` to choose the model for all spawned sub-agents (pattern or provider/model). " +
-      "If `model` is omitted, settings key `pi-subagent.model` is used when present; otherwise current session model is used. " +
+      "Each task must include an `agent` key that matches a configured type in `pi-subagent.agents`. " +
       "Returns when all complete. Great for analyzing multiple files or components.",
     parameters: {
       type: "object",
       properties: {
         tasks: {
           type: "array",
-          items: { type: "string" },
-          description: "Array of tasks, one per sub-agent",
-        },
-        model: {
-          type: "string",
-          description:
-            "Model pattern or provider/model for all spawned sub-agents. Overrides pi-subagent.model and current session model.",
+          items: {
+            type: "object",
+            properties: {
+              task: {
+                type: "string",
+                description: "Task prompt to run in this sub-agent",
+              },
+              agent: {
+                type: "string",
+                description:
+                  "Configured sub-agent type key from settings (for example: simple, smart, code-review)",
+              },
+            },
+            required: ["task", "agent"],
+          },
+          description: "Array of task descriptors, each with task + agent type",
         },
         timeout_ms: {
           type: "number",
@@ -864,17 +967,22 @@ export default function (pi: ExtensionAPI) {
     } as any,
     async execute(
       toolCallId,
-      params: { tasks: string[]; timeout_ms?: number; model?: string },
+      params: {
+        tasks: Array<{ task: string; agent: string }>;
+        timeout_ms?: number;
+      },
       signal,
       onUpdate,
       ctx,
     ) {
       const agents: SubAgent[] = [];
-      const model = resolveSubAgentModel(params.model, ctx);
 
       // Spawn all agents
-      for (const task of params.tasks) {
-        agents.push(spawnSubAgent(task, model));
+      for (const taskSpec of params.tasks) {
+        const profile = resolveSubagentProfile(taskSpec.agent, ctx);
+        agents.push(
+          spawnSubAgent(taskSpec.task, profile.model, taskSpec.agent),
+        );
       }
 
       onUpdate?.({
@@ -883,9 +991,11 @@ export default function (pi: ExtensionAPI) {
             type: "text",
             text:
               `Spawned ${agents.length} sub-agents:\n` +
-              `Model: ${model || "(plugin default)"}\n` +
               agents
-                .map((a) => `- ${a.id}: ${a.task.slice(0, 50)}...`)
+                .map(
+                  (a) =>
+                    `- ${a.id}: [${a.agentType || "unknown"}] ${a.model || "(unknown)"} | ${a.task.slice(0, 50)}...`,
+                )
                 .join("\n"),
           },
         ],
@@ -933,8 +1043,12 @@ export default function (pi: ExtensionAPI) {
           },
         ],
         details: {
-          model,
-          agents: agents.map((a) => ({ id: a.id, status: a.status })),
+          agents: agents.map((a) => ({
+            id: a.id,
+            status: a.status,
+            agentType: a.agentType,
+            model: a.model,
+          })),
         },
       };
     },
@@ -951,6 +1065,7 @@ export default function (pi: ExtensionAPI) {
   // Set up status on session start
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    refreshConfiguredAgents(ctx.cwd);
     updateSubAgentStatus();
   });
 

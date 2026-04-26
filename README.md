@@ -45,7 +45,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 
 ### Commands
 
-- `/subagent spawn <task>` - Spawn a new sub-agent
+- `/subagent spawn:<agent> <task>` - Spawn a new sub-agent using configured agent type
 - `/subagent report <id> [count]` - View recent activity entries (default: last 3)
 - `/subagent append <id> [count]` - Add recent activity report to conversation context
 - `/subagent list` - List all sub-agents
@@ -57,23 +57,21 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 
 ### Tools
 
-- `spawn_subagent` - Spawn a single sub-agent (optional `model`)
+- `spawn_subagent` - Spawn a single sub-agent (required `agent`)
 - `subagent_report` - Get recent activity entries (`count` optional, default: 3)
-- `spawn_parallel` - Spawn multiple sub-agents and wait for all (optional `model`)
+- `spawn_parallel` - Spawn multiple sub-agents and wait for all (required per-task `agent`)
 
 `count` is clamped to a safe maximum (50).
 
-#### Model resolution behavior
+#### Agent resolution behavior
 
-Sub-agent model selection uses this precedence:
+Sub-agent model selection is strict and uses configured agent types only:
 
-1. Tool parameter `model` (explicit per-call override)
-2. `settings.json` key `"pi-subagent".model` (global/project override)
-3. Current session model
+1. Command syntax: `/subagent spawn:<agent> <task>`
+2. Tool syntax: provide `agent` for each sub-agent task
+3. Resolve `agent` from `"pi-subagent".agents[agent].model`
 
-If none of the above is available, pi falls back to its normal model resolution.
-
-`"pi-subagent".model` must be an actual model override string (for example `"openai/gpt-5.3-codex"` or another valid model pattern). There is no special `"current"` value for this setting.
+There is no model override parameter and no fallback to legacy `"pi-subagent".model`.
 
 ### Configuration (`settings.json`)
 
@@ -84,25 +82,30 @@ Use the main pi settings files:
 
 Project settings override global settings.
 
-Example (global):
+Example:
 
 ```json
 {
   "pi-subagent": {
-    "model": "openai/gpt-5.3-codex"
+    "agents": {
+      "simple": {
+        "model": "provider/some-simple-model",
+        "when_to_use": "For simple tasks"
+      },
+      "smart": {
+        "model": "provider/some-smart-model",
+        "when_to_use": "For challenging tasks"
+      },
+      "code-review": {
+        "model": "provider/some-coding-model",
+        "when_to_use": "For reviewing code"
+      }
+    }
   }
 }
 ```
 
-Example (project override):
-
-```json
-{
-  "pi-subagent": {
-    "model": "anthropic/claude-sonnet-4-5"
-  }
-}
-```
+Project settings override global settings by agent key.
 
 ### Live Widget
 
