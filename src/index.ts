@@ -11,6 +11,7 @@ interface SubAgent {
   id: string;
   process: ChildProcess;
   task: string;
+  taskTitle: string;
   agentType?: string;
   model?: string;
   extraContext?: string;
@@ -176,6 +177,19 @@ function getConfiguredAgentsText(
     .join("\n");
 }
 
+function getTaskTitle(task: string, maxLength = 80): string {
+  const firstNonEmptyLine = task
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  const title = firstNonEmptyLine ?? task.trim();
+  if (!title) return "(empty task)";
+
+  if (title.length <= maxLength) return title;
+  return `${title.slice(0, Math.max(1, maxLength - 3))}...`;
+}
+
 function formatSubagentPrompt(task: string, extraContext?: string): string {
   if (!extraContext?.trim()) return task;
 
@@ -206,6 +220,7 @@ function spawnSubAgent(
     id,
     process: proc,
     task,
+    taskTitle: getTaskTitle(task),
     agentType,
     model,
     extraContext,
@@ -514,9 +529,7 @@ function updateWatchWidget() {
       widgetLines.push(
         `${statusIcon} ${id} (${agent.status}) | ${duration}s | ${modelLabel}`,
       );
-      widgetLines.push(
-        `Task: ${agent.task.slice(0, 50)}${agent.task.length > 50 ? "..." : ""}`,
-      );
+      widgetLines.push(`Task: ${agent.taskTitle}`);
 
       if (noResponseYet) {
         widgetLines.push("⚠ No response from sub-agent process yet");
@@ -603,6 +616,7 @@ function getAgentReport(id: string, requestedCount?: number): string {
 ## Sub-Agent ${id}
 
 **Task:** ${agent.task}
+**Task title:** ${agent.taskTitle}
 **Agent type:** ${agent.agentType || "(unknown)"}
 **Model:** ${agent.model || "(unknown)"}
 **Extra context:** ${agent.extraContext ? "configured" : "none"}
@@ -786,7 +800,7 @@ export default function (pi: ExtensionAPI) {
             const list = Array.from(activeAgents.entries())
               .map(
                 ([id, a]) =>
-                  `${id}: ${a.status} | ${a.agentType || "unknown"} | ${a.model || "(unknown)"}`,
+                  `${id}: ${a.status} | ${a.agentType || "unknown"} | ${a.model || "(unknown)"} | Task: ${a.taskTitle}`,
               )
               .join("\n");
             ctx.ui.notify(`Active sub-agents:\n${list}`, "info");
@@ -931,6 +945,7 @@ export default function (pi: ExtensionAPI) {
         details: {
           agentId: agent.id,
           task: agent.task,
+          taskTitle: agent.taskTitle,
           agentType: agent.agentType,
           model: agent.model,
         },
@@ -1114,7 +1129,7 @@ export default function (pi: ExtensionAPI) {
               agents
                 .map(
                   (a) =>
-                    `- ${a.id}: [${a.agentType || "unknown"}] ${a.model || "(unknown)"} | ${a.task.slice(0, 50)}...`,
+                    `- ${a.id}: [${a.agentType || "unknown"}] ${a.model || "(unknown)"} | ${a.taskTitle}`,
                 )
                 .join("\n"),
           },
@@ -1166,6 +1181,7 @@ export default function (pi: ExtensionAPI) {
           agents: agents.map((a) => ({
             id: a.id,
             status: a.status,
+            taskTitle: a.taskTitle,
             agentType: a.agentType,
             model: a.model,
           })),
