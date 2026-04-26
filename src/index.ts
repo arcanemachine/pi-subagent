@@ -633,6 +633,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("subagent", {
     description: "Spawn and manage sub-agents",
     getArgumentCompletions: (prefix: string) => {
+      refreshConfiguredAgents(currentCtx?.cwd ?? process.cwd());
+
       const baseItems = [
         {
           value: "report",
@@ -662,17 +664,17 @@ export default function (pi: ExtensionAPI) {
         }),
       );
 
-      if (prefix.startsWith("spawn:")) {
-        return spawnItems.filter((i) => i.value.startsWith(prefix));
+      const commandPrefix = prefix.trimStart();
+      if (commandPrefix.includes(" ")) {
+        return null;
       }
 
-      if ("spawn:".startsWith(prefix)) {
-        return [{ value: "spawn:", label: "spawn:<agent> <task>" }];
+      const items = [...spawnItems, ...baseItems];
+      if ("spawn:".startsWith(commandPrefix)) {
+        items.unshift({ value: "spawn:", label: "spawn:<agent> <task>" });
       }
 
-      return [...spawnItems, ...baseItems].filter((i) =>
-        i.value.startsWith(prefix),
-      );
+      return items.filter((i) => i.value.startsWith(commandPrefix));
     },
     handler: async (args: string, ctx) => {
       const trimmedArgs = args.trim();
