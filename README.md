@@ -58,6 +58,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 ### Tools
 
 - `spawn_subagent` - Spawn a single sub-agent (required `agent`)
+- `subagent_wait` - Wait briefly for completion (`timeout_ms` optional, default: 5000)
 - `subagent_report` - Get recent activity entries (`count` optional, default: 3)
 - `list_subagent_agents` - List configured agent types (name/model/when_to_use)
 - `spawn_parallel` - Spawn multiple sub-agents and wait for all (required per-task `agent`)
