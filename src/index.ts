@@ -1181,6 +1181,7 @@ export default function (pi: ExtensionAPI) {
       agent.process.kill();
     }
     activeAgents.clear();
+    startupAgentGuideSent = false;
   });
 
   // Set up status on session start
@@ -1188,6 +1189,18 @@ export default function (pi: ExtensionAPI) {
     currentCtx = ctx;
     refreshConfiguredAgents(ctx.cwd);
     updateSubAgentStatus();
+
+    if (!startupAgentGuideSent) {
+      const configuredAgentsText = getConfiguredAgentsText(ctx);
+      pi.sendMessage({
+        customType: "subagent-agents",
+        content:
+          "Sub-agent types loaded from settings. Use `spawn_subagent` with required `agent` (or `/subagent spawn:<agent> ...`).\n\n" +
+          configuredAgentsText,
+        display: false,
+      });
+      startupAgentGuideSent = true;
+    }
   });
 
   // Clear subagents when a new session is created (/new command)
@@ -1204,6 +1217,7 @@ export default function (pi: ExtensionAPI) {
       watchedAgentIds.clear();
       watchAllMode = false;
       updateWatchWidget();
+      startupAgentGuideSent = false;
     }
   });
 }

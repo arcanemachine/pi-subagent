@@ -59,6 +59,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 
 - `spawn_subagent` - Spawn a single sub-agent (required `agent`)
 - `subagent_report` - Get recent activity entries (`count` optional, default: 3)
+- `list_subagent_agents` - List configured agent types (name/model/when_to_use/extra_context)
 - `spawn_parallel` - Spawn multiple sub-agents and wait for all (required per-task `agent`)
 
 `count` is clamped to a safe maximum (50).
@@ -70,6 +71,7 @@ Sub-agent model selection is strict and uses configured agent types only:
 1. Command syntax: `/subagent spawn:<agent> <task>`
 2. Tool syntax: provide `agent` for each sub-agent task
 3. Resolve `agent` from `"pi-subagent".agents[agent].model`
+4. If `extra_context` is configured for that agent, it is prepended to the task prompt sent to the sub-agent
 
 There is no model override parameter and no fallback to legacy `"pi-subagent".model`.
 
@@ -82,7 +84,7 @@ Use the main pi settings files:
 
 Project settings override global settings.
 
-Example:
+Example (`extra_context` is optional):
 
 ```json
 {
@@ -94,11 +96,13 @@ Example:
       },
       "smart": {
         "model": "provider/some-smart-model",
-        "when_to_use": "For challenging tasks"
+        "when_to_use": "For challenging tasks",
+        "extra_context": "Think carefully and prefer correctness over speed."
       },
       "code-review": {
         "model": "provider/some-coding-model",
-        "when_to_use": "For reviewing code"
+        "when_to_use": "For reviewing code",
+        "extra_context": "Focus on correctness, edge cases, and actionable fixes."
       }
     }
   }
@@ -106,6 +110,8 @@ Example:
 ```
 
 Project settings override global settings by agent key.
+
+On session start, the extension sends an internal guidance message listing configured agent types so tool-calling models can pick valid `agent` values.
 
 ### Live Widget
 
