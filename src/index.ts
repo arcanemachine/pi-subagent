@@ -1124,7 +1124,7 @@ export default function (pi: ExtensionAPI) {
 
   // Tool: Spawn a sub-agent and immediately show it in conversation
   pi.registerTool({
-    name: "spawn_subagent",
+    name: "subagent_spawn",
     label: "Spawn Sub-Agent",
     description:
       "Spawn a sub-agent to work on a task in parallel. " +
@@ -1484,7 +1484,7 @@ export default function (pi: ExtensionAPI) {
 
   // Tool: List configured sub-agent types from settings
   pi.registerTool({
-    name: "list_subagent_agents",
+    name: "subagent_list_types",
     label: "List Sub-Agent Types",
     description:
       "List configured sub-agent types from `pi-subagent.agents`, including model and usage metadata.",
@@ -1540,7 +1540,7 @@ export default function (pi: ExtensionAPI) {
 
   // Tool: Spawn multiple sub-agents in parallel and wait for all
   pi.registerTool({
-    name: "spawn_parallel",
+    name: "subagent_spawn_parallel",
     label: "Spawn Parallel Sub-Agents",
     description:
       "Spawn multiple sub-agents to work on different tasks in parallel. " +
@@ -1708,7 +1708,7 @@ export default function (pi: ExtensionAPI) {
       pi.sendMessage({
         customType: "subagent-agents",
         content:
-          "Sub-agent types loaded from settings. Use `spawn_subagent` with required `agent` (or `/subagent spawn:<agent> ...`).\n\n" +
+          "Sub-agent types loaded from settings. Use `subagent_spawn` with required `agent` (or `/subagent spawn:<agent> ...`).\n\n" +
           configuredAgentsText,
         display: false,
       });
