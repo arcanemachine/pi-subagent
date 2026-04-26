@@ -199,12 +199,18 @@ function getConfiguredAgentsText(
     return "No sub-agent types configured. Add `pi-subagent.agents` entries to settings.";
   }
 
-  return entries
+  const limitText = maxActiveSubagents
+    ? `Max active sub-agents: ${maxActiveSubagents}`
+    : "Max active sub-agents: (unlimited)";
+
+  const agentLines = entries
     .map(({ name, profile }) => {
       const whenToUse = profile.when_to_use || "(no when_to_use provided)";
       return `- ${name}: model=${profile.model}; when_to_use=${whenToUse}`;
     })
     .join("\n");
+
+  return `${limitText}\n\n${agentLines}`;
 }
 
 function getTaskTitle(task: string, maxLength = 80): string {
@@ -1315,6 +1321,8 @@ export default function (pi: ExtensionAPI) {
         ],
         details: {
           found: true,
+          maxActiveSubagents,
+          activeCount: getActiveAgentCount(),
           agents: snapshots,
         },
       };

@@ -116,7 +116,7 @@ Example (`extra_context` and `max_active_subagents` are optional):
 
 Project settings override global settings by agent key. `max_active_subagents` is a hard cap on concurrently running sub-agents; spawn requests above the cap are rejected (not queued).
 
-On session start, the extension sends an internal guidance message listing configured agent types so tool-calling models can pick valid `agent` values.
+On session start, the extension sends an internal guidance message listing configured agent types and the active concurrency cap so tool-calling models can pick valid `agent` values.
 
 ### Live Widget
 
