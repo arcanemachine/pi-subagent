@@ -13,6 +13,7 @@ interface SubAgent {
   task: string;
   agentType?: string;
   model?: string;
+  extraContext?: string;
   status: "starting" | "running" | "completed" | "error";
   output: string[];
   startTime: number;
@@ -29,6 +30,7 @@ let watchedAgentIds: Set<string> = new Set();
 let nextAgentId = 1;
 let watchAllMode = false; // True when watching all agents (auto-add new ones)
 let configuredAgents: Record<string, SubagentProfile> = {};
+let startupAgentGuideSent = false;
 
 const DEFAULT_REPORT_COUNT = 3;
 const MAX_REPORT_COUNT = 50;
@@ -36,6 +38,7 @@ const MAX_REPORT_COUNT = 50;
 type SubagentProfile = {
   model: string;
   when_to_use?: string;
+  extra_context?: string;
 };
 
 type PiSubagentSettings = {
@@ -95,16 +98,22 @@ function getPiSubagentSettings(cwd: string): PiSubagentSettings {
     const configObject = agentConfig as Record<string, unknown>;
     const modelValue = configObject.model;
     const whenToUseValue = configObject.when_to_use;
+    const extraContextValue = configObject.extra_context;
     const model = typeof modelValue === "string" ? modelValue.trim() : "";
 
     if (!model) continue;
 
     const whenToUse =
       typeof whenToUseValue === "string" ? whenToUseValue.trim() : undefined;
+    const extraContext =
+      typeof extraContextValue === "string"
+        ? extraContextValue.trim()
+        : undefined;
 
     mergedAgents[agentName] = {
       model,
       ...(whenToUse ? { when_to_use: whenToUse } : {}),
+      ...(extraContext ? { extra_context: extraContext } : {}),
     };
   }
 
@@ -141,10 +150,44 @@ function resolveSubagentProfile(
   );
 }
 
+function getConfiguredAgentEntries(
+  ctx: ExtensionContext | null | undefined,
+): Array<{ name: string; profile: SubagentProfile }> {
+  refreshConfiguredAgents(ctx?.cwd ?? process.cwd());
+  return Object.entries(configuredAgents)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, profile]) => ({ name, profile }));
+}
+
+function getConfiguredAgentsText(
+  ctx: ExtensionContext | null | undefined,
+): string {
+  const entries = getConfiguredAgentEntries(ctx);
+
+  if (entries.length === 0) {
+    return "No sub-agent types configured. Add `pi-subagent.agents` entries to settings.";
+  }
+
+  return entries
+    .map(({ name, profile }) => {
+      const whenToUse = profile.when_to_use || "(no when_to_use provided)";
+      const extraContext = profile.extra_context ? "yes" : "no";
+      return `- ${name}: model=${profile.model}; when_to_use=${whenToUse}; extra_context=${extraContext}`;
+    })
+    .join("\n");
+}
+
+function formatSubagentPrompt(task: string, extraContext?: string): string {
+  if (!extraContext?.trim()) return task;
+
+  return `Additional context:\n${extraContext.trim()}\n\nTask:\n${task}`;
+}
+
 function spawnSubAgent(
   task: string,
   model: string,
   agentType: string,
+  extraContext?: string,
 ): SubAgent {
   const id = String(nextAgentId++);
 
@@ -166,6 +209,7 @@ function spawnSubAgent(
     task,
     agentType,
     model,
+    extraContext,
     status: "starting",
     output: [],
     startTime: Date.now(),
@@ -248,7 +292,10 @@ function spawnSubAgent(
   });
 
   // Send the initial prompt
-  const prompt = JSON.stringify({ type: "prompt", message: task });
+  const prompt = JSON.stringify({
+    type: "prompt",
+    message: formatSubagentPrompt(task, extraContext),
+  });
   proc.stdin?.write(prompt + "\n");
 
   activeAgents.set(id, agent);
@@ -559,6 +606,7 @@ function getAgentReport(id: string, requestedCount?: number): string {
 **Task:** ${agent.task}
 **Agent type:** ${agent.agentType || "(unknown)"}
 **Model:** ${agent.model || "(unknown)"}
+**Extra context:** ${agent.extraContext ? "configured" : "none"}
 **Status:** ${agent.status}
 **Duration:** ${duration}s
 **Exit code:** ${exitCodeText}${currentTool ? `\n**Current tool:** ${currentTool}` : ""}
@@ -650,7 +698,12 @@ export default function (pi: ExtensionAPI) {
 
         try {
           const profile = resolveSubagentProfile(agentType, ctx);
-          const agent = spawnSubAgent(subArgs, profile.model, agentType);
+          const agent = spawnSubAgent(
+            subArgs,
+            profile.model,
+            agentType,
+            profile.extra_context,
+          );
           ctx.ui.notify(`Spawned sub-agent ${agent.id}`, "info");
 
           // Send a message to the conversation showing what was spawned
@@ -852,7 +905,12 @@ export default function (pi: ExtensionAPI) {
       ctx,
     ) {
       const profile = resolveSubagentProfile(params.agent, ctx);
-      const agent = spawnSubAgent(params.task, profile.model, params.agent);
+      const agent = spawnSubAgent(
+        params.task,
+        profile.model,
+        params.agent,
+        profile.extra_context,
+      );
 
       return {
         content: [
@@ -927,6 +985,64 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // Tool: List configured sub-agent types from settings
+  pi.registerTool({
+    name: "list_subagent_agents",
+    label: "List Sub-Agent Types",
+    description:
+      "List configured sub-agent types from `pi-subagent.agents`, including model and usage metadata.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
+    } as any,
+    async execute(
+      toolCallId,
+      params: Record<string, never>,
+      signal,
+      onUpdate,
+      ctx,
+    ) {
+      const entries = getConfiguredAgentEntries(ctx);
+
+      if (entries.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No sub-agent types are configured. Add `pi-subagent.agents` in settings.",
+            },
+          ],
+          isError: true,
+          details: { agents: [] },
+        };
+      }
+
+      const lines = entries.map(({ name, profile }) => {
+        const whenToUse = profile.when_to_use || "(not provided)";
+        const extraContext = profile.extra_context ? "configured" : "none";
+        return `- ${name}\n  model: ${profile.model}\n  when_to_use: ${whenToUse}\n  extra_context: ${extraContext}`;
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Configured sub-agent types:\n${lines.join("\n")}`,
+          },
+        ],
+        details: {
+          agents: entries.map(({ name, profile }) => ({
+            name,
+            model: profile.model,
+            whenToUse: profile.when_to_use,
+            hasExtraContext: Boolean(profile.extra_context),
+          })),
+        },
+      };
+    },
+  });
+
   // Tool: Spawn multiple sub-agents in parallel and wait for all
   pi.registerTool({
     name: "spawn_parallel",
@@ -981,7 +1097,12 @@ export default function (pi: ExtensionAPI) {
       for (const taskSpec of params.tasks) {
         const profile = resolveSubagentProfile(taskSpec.agent, ctx);
         agents.push(
-          spawnSubAgent(taskSpec.task, profile.model, taskSpec.agent),
+          spawnSubAgent(
+            taskSpec.task,
+            profile.model,
+            taskSpec.agent,
+            profile.extra_context,
+          ),
         );
       }
 
