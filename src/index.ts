@@ -401,6 +401,7 @@ function updateWatchWidget() {
         : agent.status === "completed"
           ? "✓"
           : "✗";
+    const modelLabel = agent.model || "(model unknown)";
 
     const noResponseYet =
       (agent.status === "starting" || agent.status === "running") &&
@@ -415,11 +416,13 @@ function updateWatchWidget() {
           ? " | no response yet"
           : "";
       widgetLines.push(
-        `${statusIcon} ${id} ${agent.status} ${duration}s${toolInfo}`,
+        `${statusIcon} ${id} ${agent.status} ${duration}s | ${modelLabel}${toolInfo}`,
       );
     } else {
       // Verbose: full info with transcript
-      widgetLines.push(`${statusIcon} ${id} (${agent.status}) | ${duration}s`);
+      widgetLines.push(
+        `${statusIcon} ${id} (${agent.status}) | ${duration}s | ${modelLabel}`,
+      );
       widgetLines.push(
         `Task: ${agent.task.slice(0, 50)}${agent.task.length > 50 ? "..." : ""}`,
       );
