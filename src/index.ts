@@ -799,16 +799,25 @@ ${recentEntries.join("\n\n") || "(no activity yet)"}
 `;
 }
 
-function killSubAgent(id: string): boolean {
+function killSubAgent(id: string): {
+  ok: boolean;
+  reason?: "not_found" | "already_finished";
+} {
   const agent = activeAgents.get(id);
-  if (!agent) return false;
+  if (!agent) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  if (agent.status === "completed" || agent.status === "error") {
+    return { ok: false, reason: "already_finished" };
+  }
 
   agent.process.kill();
   activeAgents.delete(id);
   watchedAgentIds.delete(id);
   updateSubAgentStatus();
   updateWatchWidget();
-  return true;
+  return { ok: true };
 }
 
 export default function (pi: ExtensionAPI) {
@@ -1025,8 +1034,14 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify("Usage: /subagent kill <id>", "error");
             return;
           }
-          if (killSubAgent(subArgs)) {
+          const result = killSubAgent(subArgs);
+          if (result.ok) {
             ctx.ui.notify(`Killed sub-agent ${subArgs}`, "info");
+          } else if (result.reason === "already_finished") {
+            ctx.ui.notify(
+              `Sub-agent ${subArgs} already finished. Use /subagent prune to remove it.`,
+              "warning",
+            );
           } else {
             ctx.ui.notify(`Sub-agent ${subArgs} not found`, "error");
           }
@@ -1328,18 +1343,24 @@ export default function (pi: ExtensionAPI) {
       onUpdate,
       ctx,
     ) {
-      const killed = killSubAgent(params.agent_id);
-      if (!killed) {
+      const result = killSubAgent(params.agent_id);
+      if (!result.ok) {
+        const message =
+          result.reason === "already_finished"
+            ? `Sub-agent ${params.agent_id} already finished. Use prune if you want to remove it from tracking.`
+            : `Sub-agent ${params.agent_id} not found`;
+
         return {
           content: [
             {
               type: "text",
-              text: `Sub-agent ${params.agent_id} not found`,
+              text: message,
             },
           ],
           isError: true,
           details: {
             killed: false,
+            reason: result.reason,
             agentId: params.agent_id,
           },
         };
