@@ -21,6 +21,9 @@ interface SubAgent {
   endTime?: number;
   exitCode?: number;
   currentTool?: string;
+  lastAction?: string;
+  progressPercent?: number;
+  progressBuffer?: string;
   lastActivity: number;
   receivedEvent: boolean;
 }
@@ -31,12 +34,14 @@ let watchedAgentIds: Set<string> = new Set();
 let nextAgentId = 1;
 let watchAllMode = false; // True when watching all agents (auto-add new ones)
 let configuredAgents: Record<string, SubagentProfile> = {};
+let maxActiveSubagents: number | undefined = undefined;
 let startupAgentGuideSent = false;
 
 const DEFAULT_REPORT_COUNT = 3;
 const MAX_REPORT_COUNT = 50;
 const DEFAULT_WAIT_TIMEOUT_MS = 5000;
 const MAX_WAIT_TIMEOUT_MS = 120000;
+const MAX_ACTIVE_SUBAGENTS_CAP = 100;
 
 type SubagentProfile = {
   model: string;
@@ -46,6 +51,7 @@ type SubagentProfile = {
 
 type PiSubagentSettings = {
   agents?: Record<string, SubagentProfile>;
+  max_active_subagents?: number;
 };
 
 function readJsonFile(path: string): Record<string, unknown> {
@@ -60,6 +66,15 @@ function readJsonFile(path: string): Record<string, unknown> {
   }
 }
 
+function normalizeMaxActiveSubagents(raw: unknown): number | undefined {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+
+  const normalized = Math.trunc(raw);
+  if (normalized < 1) return undefined;
+
+  return Math.min(normalized, MAX_ACTIVE_SUBAGENTS_CAP);
+}
+
 function getPiSubagentSettings(cwd: string): PiSubagentSettings {
   const globalSettingsPath = join(getAgentDir(), "settings.json");
   const projectSettingsPath = join(cwd, ".pi", "settings.json");
@@ -70,15 +85,18 @@ function getPiSubagentSettings(cwd: string): PiSubagentSettings {
   const globalSubagent = globalSettings["pi-subagent"];
   const projectSubagent = projectSettings["pi-subagent"];
 
-  const globalAgentsValue =
+  const globalSubagentObj =
     globalSubagent && typeof globalSubagent === "object"
-      ? (globalSubagent as Record<string, unknown>).agents
-      : undefined;
+      ? (globalSubagent as Record<string, unknown>)
+      : {};
 
-  const projectAgentsValue =
+  const projectSubagentObj =
     projectSubagent && typeof projectSubagent === "object"
-      ? (projectSubagent as Record<string, unknown>).agents
-      : undefined;
+      ? (projectSubagent as Record<string, unknown>)
+      : {};
+
+  const globalAgentsValue = globalSubagentObj.agents;
+  const projectAgentsValue = projectSubagentObj.agents;
 
   const globalAgents =
     globalAgentsValue && typeof globalAgentsValue === "object"
@@ -120,13 +138,23 @@ function getPiSubagentSettings(cwd: string): PiSubagentSettings {
     };
   }
 
+  const projectMaxActive = normalizeMaxActiveSubagents(
+    projectSubagentObj.max_active_subagents,
+  );
+  const globalMaxActive = normalizeMaxActiveSubagents(
+    globalSubagentObj.max_active_subagents,
+  );
+
   return {
     agents: mergedAgents,
+    max_active_subagents: projectMaxActive ?? globalMaxActive,
   };
 }
 
 function refreshConfiguredAgents(cwd: string): void {
-  configuredAgents = getPiSubagentSettings(cwd).agents || {};
+  const settings = getPiSubagentSettings(cwd);
+  configuredAgents = settings.agents || {};
+  maxActiveSubagents = settings.max_active_subagents;
 }
 
 function resolveSubagentProfile(
@@ -229,6 +257,7 @@ function spawnSubAgent(
     status: "starting",
     output: [],
     startTime: Date.now(),
+    lastAction: "starting",
     lastActivity: Date.now(),
     receivedEvent: false,
   };
@@ -252,20 +281,36 @@ function spawnSubAgent(
         // Track what the sub-agent is currently doing
         if (event.type === "tool_execution_start") {
           agent.currentTool = `${event.toolName}(${JSON.stringify(event.args).slice(0, 50)}...)`;
+          agent.lastAction = `🔧 ${event.toolName}`;
+        } else if (event.type === "tool_execution_end") {
+          agent.currentTool = undefined;
+          agent.lastAction = event.toolName
+            ? `✅ ${event.toolName}`
+            : "tool finished";
         } else if (
-          event.type === "tool_execution_end" ||
-          event.type === "agent_end"
+          event.type === "message_update" &&
+          event.assistantMessageEvent
         ) {
+          const delta = event.assistantMessageEvent;
+          if (delta.type === "text_delta") {
+            updateProgressFromTextDelta(agent, delta.delta || "");
+            if (!agent.currentTool && agent.progressPercent === undefined) {
+              agent.lastAction = "💬 responding";
+            }
+          }
+        } else if (event.type === "agent_end") {
           agent.currentTool = undefined;
         }
 
         // Update status
         if (event.type === "agent_start") {
           agent.status = "running";
+          agent.lastAction = "started";
         } else if (event.type === "agent_end") {
           agent.status = "completed";
           agent.endTime = Date.now();
           agent.currentTool = undefined;
+          agent.lastAction = "finished";
           // Force immediate widget update on completion
           updateSubAgentStatus();
           // Update watch widget if being watched
@@ -289,7 +334,11 @@ function spawnSubAgent(
 
   // Handle stderr
   proc.stderr?.on("data", (data: Buffer) => {
-    agent.output.push(`[stderr]: ${data.toString().trim()}`);
+    const stderrText = data.toString().trim();
+    agent.output.push(`[stderr]: ${stderrText}`);
+    if (stderrText) {
+      agent.lastAction = `stderr: ${stderrText.slice(0, 60)}`;
+    }
     agent.lastActivity = Date.now();
   });
 
@@ -299,6 +348,7 @@ function spawnSubAgent(
     if (code !== 0 && agent.status !== "completed") {
       agent.status = "error";
       agent.endTime = Date.now();
+      agent.lastAction = `exited with code ${code ?? "unknown"}`;
     }
     updateSubAgentStatus();
     // Update watch widget if being watched
@@ -333,7 +383,67 @@ function getActiveAgentCount(): number {
 }
 
 function getStatusText(): string {
-  return `active subagents: ${getActiveAgentCount()}`;
+  const activeCount = getActiveAgentCount();
+  if (!maxActiveSubagents) return `active subagents: ${activeCount}`;
+
+  return `active subagents: ${activeCount}/${maxActiveSubagents}`;
+}
+
+function getSpawnLimitErrorMessage(attemptedCount = 1): string | null {
+  if (!maxActiveSubagents) return null;
+
+  const activeCount = getActiveAgentCount();
+  if (activeCount + attemptedCount <= maxActiveSubagents) return null;
+
+  const remainingSlots = Math.max(0, maxActiveSubagents - activeCount);
+  return (
+    `Too many active sub-agents (${activeCount}/${maxActiveSubagents}). ` +
+    `Requested ${attemptedCount}, available slots: ${remainingSlots}. ` +
+    "Wait for some sub-agents to finish and try again."
+  );
+}
+
+function updateProgressFromTextDelta(agent: SubAgent, deltaText: string): void {
+  if (!deltaText) return;
+
+  const combined = `${agent.progressBuffer || ""}${deltaText}`.slice(-240);
+  agent.progressBuffer = combined;
+
+  const progressMatches = [
+    ...combined.matchAll(/\b(\d{1,3})\s*(?:%|percent)\b/gi),
+  ];
+  const lastMatch = progressMatches[progressMatches.length - 1];
+  if (!lastMatch) return;
+
+  const parsed = Number.parseInt(lastMatch[1], 10);
+  if (!Number.isFinite(parsed)) return;
+
+  const normalized = Math.max(0, Math.min(100, parsed));
+  agent.progressPercent = normalized;
+  agent.lastAction = `progress ${normalized}%`;
+}
+
+function buildAgentStatusSnapshot(agent: SubAgent) {
+  const now = Date.now();
+  const durationSec = agent.endTime
+    ? Math.floor((agent.endTime - agent.startTime) / 1000)
+    : Math.floor((now - agent.startTime) / 1000);
+
+  return {
+    id: agent.id,
+    status: agent.status,
+    task: agent.task,
+    taskTitle: agent.taskTitle,
+    agentType: agent.agentType || "(unknown)",
+    model: agent.model || "(unknown)",
+    durationSec,
+    currentTool: agent.currentTool,
+    lastAction: agent.lastAction,
+    progressPercent: agent.progressPercent,
+    lastActivityMsAgo: Math.max(0, now - agent.lastActivity),
+    receivedEvent: agent.receivedEvent,
+    exitCode: agent.exitCode,
+  };
 }
 
 function updateSubAgentStatus() {
@@ -505,7 +615,11 @@ function updateWatchWidget() {
     "────────────────────────────────────────",
   ];
 
-  for (const id of watchedAgentIds) {
+  const orderedWatchedIds = watchAllMode
+    ? Array.from(watchedAgentIds).reverse()
+    : Array.from(watchedAgentIds);
+
+  for (const id of orderedWatchedIds) {
     const agent = activeAgents.get(id);
     if (!agent) continue;
 
@@ -528,13 +642,20 @@ function updateWatchWidget() {
 
     if (compactMode) {
       // Compact: one line per agent
-      const toolInfo = agent.currentTool
-        ? ` | ${agent.currentTool.slice(0, 40)}`
-        : noResponseYet
-          ? " | no response yet"
+      const actionInfo = agent.currentTool
+        ? agent.currentTool
+        : agent.lastAction
+          ? agent.lastAction
+          : noResponseYet
+            ? "no response yet"
+            : "idle";
+      const progressInfo =
+        agent.progressPercent !== undefined &&
+        (agent.status === "starting" || agent.status === "running")
+          ? `~${agent.progressPercent}% | `
           : "";
       widgetLines.push(
-        `${statusIcon} ${id} ${agent.status} ${duration}s | ${modelLabel}${toolInfo}`,
+        `${statusIcon} ${id} ${agent.status} ${duration}s | ${modelLabel} | ${progressInfo}${actionInfo.slice(0, 60)}`,
       );
     } else {
       // Verbose: full info with transcript
@@ -684,7 +805,9 @@ function killSubAgent(id: string): boolean {
 
   agent.process.kill();
   activeAgents.delete(id);
+  watchedAgentIds.delete(id);
   updateSubAgentStatus();
+  updateWatchWidget();
   return true;
 }
 
@@ -699,6 +822,10 @@ export default function (pi: ExtensionAPI) {
         {
           value: "report",
           label: "report <id> [count] — Get recent sub-agent activity",
+        },
+        {
+          value: "status",
+          label: "status [id] — Show current structured status",
         },
         { value: "list", label: "list — List all sub-agents" },
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
@@ -737,10 +864,11 @@ export default function (pi: ExtensionAPI) {
       return items.filter((i) => i.value.startsWith(commandPrefix));
     },
     handler: async (args: string, ctx) => {
+      refreshConfiguredAgents(ctx.cwd);
       const trimmedArgs = args.trim();
       if (!trimmedArgs) {
         ctx.ui.notify(
-          "Usage: /subagent spawn:<agent>|report|append|list|kill|killall|prune|show|hide",
+          "Usage: /subagent spawn:<agent>|report|status|append|list|kill|killall|prune|show|hide",
           "error",
         );
         return;
@@ -758,6 +886,12 @@ export default function (pi: ExtensionAPI) {
         }
 
         try {
+          const limitError = getSpawnLimitErrorMessage(1);
+          if (limitError) {
+            ctx.ui.notify(limitError, "error");
+            return;
+          }
+
           const profile = resolveSubagentProfile(agentType, ctx);
           const agent = spawnSubAgent(
             subArgs,
@@ -808,6 +942,39 @@ export default function (pi: ExtensionAPI) {
           const separator = "─".repeat(40);
           ctx.ui.notify(`${separator}\n${report}\n${separator}`, "info");
           break;
+        }
+
+        case "status": {
+          const statusId = rest[0];
+
+          if (statusId) {
+            const agent = activeAgents.get(statusId);
+            if (!agent) {
+              ctx.ui.notify(`Sub-agent ${statusId} not found`, "error");
+              return;
+            }
+
+            const snapshot = buildAgentStatusSnapshot(agent);
+            ctx.ui.notify(
+              `Sub-agent ${statusId} status:\n${JSON.stringify(snapshot, null, 2)}`,
+              "info",
+            );
+            return;
+          }
+
+          if (activeAgents.size === 0) {
+            ctx.ui.notify("No sub-agents found", "info");
+            return;
+          }
+
+          const snapshots = Array.from(activeAgents.values()).map((agent) =>
+            buildAgentStatusSnapshot(agent),
+          );
+          ctx.ui.notify(
+            `Sub-agent status:\n${JSON.stringify(snapshots, null, 2)}`,
+            "info",
+          );
+          return;
         }
 
         case "append": {
@@ -927,7 +1094,7 @@ export default function (pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent spawn:<agent> <task> | report|append|list|kill|killall|prune|show|hide",
+            "Usage: /subagent spawn:<agent> <task> | report|status|append|list|kill|killall|prune|show|hide",
             "error",
           );
       }
@@ -965,6 +1132,22 @@ export default function (pi: ExtensionAPI) {
       onUpdate,
       ctx,
     ) {
+      refreshConfiguredAgents(ctx.cwd);
+
+      const limitError = getSpawnLimitErrorMessage(1);
+      if (limitError) {
+        return {
+          content: [{ type: "text", text: limitError }],
+          isError: true,
+          details: {
+            rejected: true,
+            reason: "max_active_subagents_reached",
+            active: getActiveAgentCount(),
+            maxActive: maxActiveSubagents,
+          },
+        };
+      }
+
       const profile = resolveSubagentProfile(params.agent, ctx);
       const agent = spawnSubAgent(
         params.task,
@@ -1043,6 +1226,136 @@ export default function (pi: ExtensionAPI) {
           },
         ],
         details: { agentId: params.agent_id },
+      };
+    },
+  });
+
+  // Tool: Get live structured status for one or all sub-agents
+  pi.registerTool({
+    name: "subagent_status",
+    label: "Sub-Agent Status",
+    description:
+      "Get current sub-agent status. " +
+      "Returns structured state for one agent (`agent_id`) or all known agents when omitted.",
+    parameters: {
+      type: "object",
+      properties: {
+        agent_id: {
+          type: "string",
+          description: "Optional sub-agent ID to inspect",
+        },
+      },
+      required: [],
+    } as any,
+    async execute(
+      toolCallId,
+      params: { agent_id?: string },
+      signal,
+      onUpdate,
+      ctx,
+    ) {
+      if (params.agent_id) {
+        const agent = activeAgents.get(params.agent_id);
+        if (!agent) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Sub-agent ${params.agent_id} not found`,
+              },
+            ],
+            isError: true,
+            details: {
+              found: false,
+              agentId: params.agent_id,
+            },
+          };
+        }
+
+        const snapshot = buildAgentStatusSnapshot(agent);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(snapshot, null, 2),
+            },
+          ],
+          details: {
+            found: true,
+            agent: snapshot,
+          },
+        };
+      }
+
+      const snapshots = Array.from(activeAgents.values()).map((agent) =>
+        buildAgentStatusSnapshot(agent),
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(snapshots, null, 2),
+          },
+        ],
+        details: {
+          found: true,
+          agents: snapshots,
+        },
+      };
+    },
+  });
+
+  // Tool: Kill a specific sub-agent
+  pi.registerTool({
+    name: "subagent_kill",
+    label: "Kill Sub-Agent",
+    description: "Kill a running sub-agent by ID.",
+    parameters: {
+      type: "object",
+      properties: {
+        agent_id: {
+          type: "string",
+          description: "The sub-agent ID to terminate",
+        },
+      },
+      required: ["agent_id"],
+    } as any,
+    async execute(
+      toolCallId,
+      params: { agent_id: string },
+      signal,
+      onUpdate,
+      ctx,
+    ) {
+      const killed = killSubAgent(params.agent_id);
+      if (!killed) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Sub-agent ${params.agent_id} not found`,
+            },
+          ],
+          isError: true,
+          details: {
+            killed: false,
+            agentId: params.agent_id,
+          },
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Killed sub-agent ${params.agent_id}`,
+          },
+        ],
+        details: {
+          killed: true,
+          agentId: params.agent_id,
+        },
       };
     },
   });
@@ -1244,6 +1557,23 @@ export default function (pi: ExtensionAPI) {
       onUpdate,
       ctx,
     ) {
+      refreshConfiguredAgents(ctx.cwd);
+
+      const limitError = getSpawnLimitErrorMessage(params.tasks.length);
+      if (limitError) {
+        return {
+          content: [{ type: "text", text: limitError }],
+          isError: true,
+          details: {
+            rejected: true,
+            reason: "max_active_subagents_reached",
+            active: getActiveAgentCount(),
+            maxActive: maxActiveSubagents,
+            requested: params.tasks.length,
+          },
+        };
+      }
+
       const agents: SubAgent[] = [];
 
       // Spawn all agents

@@ -47,6 +47,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 
 - `/subagent spawn:<agent> <task>` - Spawn a new sub-agent using configured agent type
 - `/subagent report <id> [count]` - View recent activity entries (default: last 3)
+- `/subagent status [id]` - View structured live status for one/all sub-agents
 - `/subagent append <id> [count]` - Add recent activity report to conversation context
 - `/subagent list` - List all sub-agents
 - `/subagent kill <id>` - Kill a specific sub-agent
@@ -60,6 +61,8 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `spawn_subagent` - Spawn a single sub-agent (required `agent`)
 - `subagent_wait` - Wait briefly for completion (`timeout_ms` optional, default: 5000)
 - `subagent_report` - Get recent activity entries (`count` optional, default: 3)
+- `subagent_status` - Get structured current status (`agent_id` optional)
+- `subagent_kill` - Kill a specific sub-agent by ID
 - `list_subagent_agents` - List configured agent types (name/model/when_to_use)
 - `spawn_parallel` - Spawn multiple sub-agents and wait for all (required per-task `agent`)
 
@@ -85,11 +88,12 @@ Use the main pi settings files:
 
 Project settings override global settings.
 
-Example (`extra_context` is optional):
+Example (`extra_context` and `max_active_subagents` are optional):
 
 ```json
 {
   "pi-subagent": {
+    "max_active_subagents": 4,
     "agents": {
       "simple": {
         "model": "provider/some-simple-model",
@@ -110,7 +114,7 @@ Example (`extra_context` is optional):
 }
 ```
 
-Project settings override global settings by agent key.
+Project settings override global settings by agent key. `max_active_subagents` is a hard cap on concurrently running sub-agents; spawn requests above the cap are rejected (not queued).
 
 On session start, the extension sends an internal guidance message listing configured agent types so tool-calling models can pick valid `agent` values.
 
@@ -134,7 +138,8 @@ The widget shows:
 - Status icon (⏳ running / ✓ completed / ✗ error)
 - Duration
 - Task description
-- Current tool being executed (if running)
+- Current tool / last action (if running)
+- Optional progress hints when sub-agents self-report percentages (for example, "50%")
 
 Completed agents remain visible until you run `/subagent hide`.
 
