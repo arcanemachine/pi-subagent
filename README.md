@@ -59,7 +59,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 
 - `spawn_subagent` - Spawn a single sub-agent (required `agent`)
 - `subagent_report` - Get recent activity entries (`count` optional, default: 3)
-- `list_subagent_agents` - List configured agent types (name/model/when_to_use/extra_context)
+- `list_subagent_agents` - List configured agent types (name/model/when_to_use)
 - `spawn_parallel` - Spawn multiple sub-agents and wait for all (required per-task `agent`)
 
 `count` is clamped to a safe maximum (50).

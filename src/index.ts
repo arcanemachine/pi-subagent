@@ -171,8 +171,7 @@ function getConfiguredAgentsText(
   return entries
     .map(({ name, profile }) => {
       const whenToUse = profile.when_to_use || "(no when_to_use provided)";
-      const extraContext = profile.extra_context ? "yes" : "no";
-      return `- ${name}: model=${profile.model}; when_to_use=${whenToUse}; extra_context=${extraContext}`;
+      return `- ${name}: model=${profile.model}; when_to_use=${whenToUse}`;
     })
     .join("\n");
 }
@@ -1020,8 +1019,7 @@ export default function (pi: ExtensionAPI) {
 
       const lines = entries.map(({ name, profile }) => {
         const whenToUse = profile.when_to_use || "(not provided)";
-        const extraContext = profile.extra_context ? "configured" : "none";
-        return `- ${name}\n  model: ${profile.model}\n  when_to_use: ${whenToUse}\n  extra_context: ${extraContext}`;
+        return `- ${name}\n  model: ${profile.model}\n  when_to_use: ${whenToUse}`;
       });
 
       return {
@@ -1036,7 +1034,6 @@ export default function (pi: ExtensionAPI) {
             name,
             model: profile.model,
             whenToUse: profile.when_to_use,
-            hasExtraContext: Boolean(profile.extra_context),
           })),
         },
       };
