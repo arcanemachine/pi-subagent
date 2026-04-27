@@ -60,7 +60,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 ### Tools
 
 - `subagent_spawn` - Spawn a single sub-agent (required `agent`)
-- `subagent_wait` - Wait briefly for completion (`timeout_ms` optional, default: 5000)
+- `subagent_wait` - Wait briefly for completion (`timeout_ms` optional, default: 15000)
 - `subagent_report` - Get recent activity entries (`count` optional, default: 3)
 - `subagent_status` - Get structured current status (`agent_id` optional)
 - `subagent_notify` - Send follow-up guidance to a running sub-agent

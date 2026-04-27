@@ -44,7 +44,7 @@ let startupAgentGuideSent = false;
 
 const DEFAULT_REPORT_COUNT = 3;
 const MAX_REPORT_COUNT = 50;
-const DEFAULT_WAIT_TIMEOUT_MS = 5000;
+const DEFAULT_WAIT_TIMEOUT_MS = 15000;
 const MAX_WAIT_TIMEOUT_MS = 120000;
 const MAX_ACTIVE_SUBAGENTS_CAP = 100;
 const MAX_DEFAULT_TIMEOUT_SECONDS = 86400;
@@ -1669,7 +1669,7 @@ export default function (pi: ExtensionAPI) {
         },
         timeout_ms: {
           type: "number",
-          description: "How long to wait before returning. Defaults to 5000ms.",
+          description: "How long to wait before returning. Defaults to 15000ms."
           default: DEFAULT_WAIT_TIMEOUT_MS,
         },
       },
