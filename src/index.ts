@@ -1693,7 +1693,7 @@ export default function (pi: ExtensionAPI) {
         },
         timeout_ms: {
           type: "number",
-          description: "How long to wait before returning. Defaults to 15000ms."
+          description: "How long to wait before returning. Defaults to 15000ms.",
           default: DEFAULT_WAIT_TIMEOUT_MS,
         },
       },
