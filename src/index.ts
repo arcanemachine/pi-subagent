@@ -1676,16 +1676,21 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
+      const sentText = params.text.trim();
+
       return {
         content: [
           {
             type: "text",
-            text: `Sent guidance notification to sub-agent ${params.agent_id}`,
+            text:
+              `Sent guidance notification to sub-agent ${params.agent_id}\n` +
+              `Message: ${sentText}`,
           },
         ],
         details: {
           sent: true,
           agentId: params.agent_id,
+          message: sentText,
         },
       };
     },
