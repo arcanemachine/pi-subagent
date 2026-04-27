@@ -26,6 +26,10 @@ interface SubAgent {
   progressBuffer?: string;
   lastActivity: number;
   receivedEvent: boolean;
+  timeoutSeconds?: number;
+  timeoutAt?: number;
+  timeoutNotified?: boolean;
+  timeoutHandle?: NodeJS.Timeout;
 }
 
 const activeAgents = new Map<string, SubAgent>();
@@ -35,6 +39,7 @@ let nextAgentId = 1;
 let watchAllMode = false; // True when watching all agents (auto-add new ones)
 let configuredAgents: Record<string, SubagentProfile> = {};
 let maxActiveSubagents: number | undefined = undefined;
+let defaultTimeoutSeconds: number | undefined = undefined;
 let startupAgentGuideSent = false;
 
 const DEFAULT_REPORT_COUNT = 3;
@@ -42,6 +47,7 @@ const MAX_REPORT_COUNT = 50;
 const DEFAULT_WAIT_TIMEOUT_MS = 5000;
 const MAX_WAIT_TIMEOUT_MS = 120000;
 const MAX_ACTIVE_SUBAGENTS_CAP = 100;
+const MAX_DEFAULT_TIMEOUT_SECONDS = 86400;
 
 type SubagentProfile = {
   model: string;
@@ -52,6 +58,7 @@ type SubagentProfile = {
 type PiSubagentSettings = {
   agents?: Record<string, SubagentProfile>;
   max_active_subagents?: number;
+  default_timeout_seconds?: number;
 };
 
 function readJsonFile(path: string): Record<string, unknown> {
@@ -73,6 +80,15 @@ function normalizeMaxActiveSubagents(raw: unknown): number | undefined {
   if (normalized < 1) return undefined;
 
   return Math.min(normalized, MAX_ACTIVE_SUBAGENTS_CAP);
+}
+
+function normalizeDefaultTimeoutSeconds(raw: unknown): number | undefined {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+
+  const normalized = Math.trunc(raw);
+  if (normalized < 1) return undefined;
+
+  return Math.min(normalized, MAX_DEFAULT_TIMEOUT_SECONDS);
 }
 
 function getPiSubagentSettings(cwd: string): PiSubagentSettings {
@@ -145,9 +161,18 @@ function getPiSubagentSettings(cwd: string): PiSubagentSettings {
     globalSubagentObj.max_active_subagents,
   );
 
+  const projectDefaultTimeoutSeconds = normalizeDefaultTimeoutSeconds(
+    projectSubagentObj.default_timeout_seconds,
+  );
+  const globalDefaultTimeoutSeconds = normalizeDefaultTimeoutSeconds(
+    globalSubagentObj.default_timeout_seconds,
+  );
+
   return {
     agents: mergedAgents,
     max_active_subagents: projectMaxActive ?? globalMaxActive,
+    default_timeout_seconds:
+      projectDefaultTimeoutSeconds ?? globalDefaultTimeoutSeconds,
   };
 }
 
@@ -155,6 +180,7 @@ function refreshConfiguredAgents(cwd: string): void {
   const settings = getPiSubagentSettings(cwd);
   configuredAgents = settings.agents || {};
   maxActiveSubagents = settings.max_active_subagents;
+  defaultTimeoutSeconds = settings.default_timeout_seconds;
 }
 
 function resolveSubagentProfile(
@@ -202,6 +228,9 @@ function getConfiguredAgentsText(
   const limitText = maxActiveSubagents
     ? `Max active sub-agents: ${maxActiveSubagents}`
     : "Max active sub-agents: (unlimited)";
+  const timeoutText = defaultTimeoutSeconds
+    ? `Default timeout: ${defaultTimeoutSeconds}s`
+    : "Default timeout: (none)";
 
   const agentLines = entries
     .map(({ name, profile }) => {
@@ -210,7 +239,7 @@ function getConfiguredAgentsText(
     })
     .join("\n");
 
-  return `${limitText}\n\n${agentLines}`;
+  return `${limitText}\n${timeoutText}\n\n${agentLines}`;
 }
 
 function getTaskTitle(task: string, maxLength = 80): string {
@@ -230,6 +259,38 @@ function formatSubagentPrompt(task: string, extraContext?: string): string {
   if (!extraContext?.trim()) return task;
 
   return `Additional context:\n${extraContext.trim()}\n\nTask:\n${task}`;
+}
+
+function clearSubAgentTimeout(agent: SubAgent): void {
+  if (!agent.timeoutHandle) return;
+
+  clearTimeout(agent.timeoutHandle);
+  agent.timeoutHandle = undefined;
+}
+
+function scheduleSubAgentTimeout(agent: SubAgent): void {
+  if (!defaultTimeoutSeconds) return;
+
+  agent.timeoutSeconds = defaultTimeoutSeconds;
+  agent.timeoutAt = agent.startTime + defaultTimeoutSeconds * 1000;
+
+  agent.timeoutHandle = setTimeout(() => {
+    agent.timeoutHandle = undefined;
+
+    if (agent.status === "completed" || agent.status === "error") {
+      return;
+    }
+
+    const timeoutText =
+      `Time budget reached (${defaultTimeoutSeconds}s). ` +
+      "Please report what you have so far in a concise summary, then finish up now.";
+
+    const result = notifySubAgent(agent.id, timeoutText);
+    if (result.ok) {
+      agent.timeoutNotified = true;
+      agent.lastAction = `⏰ timeout reached (${defaultTimeoutSeconds}s)`;
+    }
+  }, defaultTimeoutSeconds * 1000);
 }
 
 function spawnSubAgent(
@@ -350,6 +411,7 @@ function spawnSubAgent(
 
   // Handle process exit
   proc.on("exit", (code) => {
+    clearSubAgentTimeout(agent);
     agent.exitCode = code ?? undefined;
     if (code !== 0 && agent.status !== "completed") {
       agent.status = "error";
@@ -371,6 +433,7 @@ function spawnSubAgent(
   proc.stdin?.write(prompt + "\n");
 
   activeAgents.set(id, agent);
+  scheduleSubAgentTimeout(agent);
 
   // Auto-add to watch list if in watch-all mode
   if (watchAllMode) {
@@ -449,6 +512,9 @@ function buildAgentStatusSnapshot(agent: SubAgent) {
     lastActivityMsAgo: Math.max(0, now - agent.lastActivity),
     receivedEvent: agent.receivedEvent,
     exitCode: agent.exitCode,
+    timeoutSeconds: agent.timeoutSeconds,
+    timeoutAt: agent.timeoutAt,
+    timeoutNotified: agent.timeoutNotified,
   };
 }
 
@@ -472,6 +538,7 @@ function buildStatusSummary() {
     remainingSlots: maxActiveSubagents
       ? Math.max(0, maxActiveSubagents - activeCount)
       : null,
+    defaultTimeoutSeconds: defaultTimeoutSeconds ?? null,
     totalKnownAgents: activeAgents.size,
   };
 }
@@ -842,6 +909,7 @@ function killSubAgent(id: string): {
     return { ok: false, reason: "already_finished" };
   }
 
+  clearSubAgentTimeout(agent);
   agent.process.kill();
   activeAgents.delete(id);
   watchedAgentIds.delete(id);
@@ -1879,6 +1947,7 @@ export default function (pi: ExtensionAPI) {
   // Clean up on shutdown
   pi.on("session_shutdown", async () => {
     for (const [id, agent] of activeAgents) {
+      clearSubAgentTimeout(agent);
       agent.process.kill();
     }
     activeAgents.clear();
@@ -1910,6 +1979,7 @@ export default function (pi: ExtensionAPI) {
     if (event.reason === "new") {
       // Kill any remaining processes and clear the list
       for (const [id, agent] of activeAgents) {
+        clearSubAgentTimeout(agent);
         agent.process.kill();
       }
       activeAgents.clear();

@@ -90,12 +90,13 @@ Use the main pi settings files:
 
 Project settings override global settings.
 
-Example (`extra_context` and `max_active_subagents` are optional):
+Example (`extra_context`, `max_active_subagents`, and `default_timeout_seconds` are optional):
 
 ```json
 {
   "pi-subagent": {
     "max_active_subagents": 4,
+    "default_timeout_seconds": 600,
     "agents": {
       "simple": {
         "model": "provider/some-simple-model",
@@ -117,6 +118,8 @@ Example (`extra_context` and `max_active_subagents` are optional):
 ```
 
 Project settings override global settings by agent key. `max_active_subagents` is a hard cap on concurrently running sub-agents; spawn requests above the cap are rejected (not queued).
+
+`default_timeout_seconds` controls an automatic timeout notification for each spawned sub-agent. When the timeout is reached, the parent sends guidance asking the sub-agent to report progress so far and finish up. The default is no timeout.
 
 On session start, the extension sends an internal guidance message listing configured agent types and the active concurrency cap so tool-calling models can pick valid `agent` values.
 
