@@ -613,6 +613,18 @@ function buildTranscriptLines(
         const notifyText =
           typeof event.text === "string" ? event.text : "(no text)";
         transcript.push(`📨 Parent notify: ${notifyText}`);
+      } else if (event.type === "response") {
+        if (currentMessage.trim()) {
+          transcript.push(`💬 ${currentMessage.trim()}`);
+          currentMessage = "";
+        }
+
+        const command =
+          typeof event.command === "string" ? event.command : "(unknown)";
+        const success = event.success === true;
+        transcript.push(
+          `${success ? "✅" : "❌"} RPC response (${command})${success ? "" : " failed"}`,
+        );
       } else if (
         event.type === "message_update" &&
         event.assistantMessageEvent
@@ -698,6 +710,18 @@ function buildReportEntries(agent: SubAgent): string[] {
         const notifyText =
           typeof event.text === "string" ? event.text : "(no text)";
         entries.push(`📨 Parent notify: ${notifyText}`);
+      } else if (event.type === "response") {
+        if (currentMessage.trim()) {
+          entries.push(`💬 ${currentMessage.trim()}`);
+          currentMessage = "";
+        }
+
+        const command =
+          typeof event.command === "string" ? event.command : "(unknown)";
+        const success = event.success === true;
+        entries.push(
+          `${success ? "✅" : "❌"} RPC response (${command})${success ? "" : " failed"}`,
+        );
       } else if (
         event.type === "message_update" &&
         event.assistantMessageEvent
@@ -1000,20 +1024,24 @@ function notifySubAgent(
     return { ok: false, reason: "stdin_unavailable" };
   }
 
-  const prompt = JSON.stringify({
-    type: "prompt",
+  const requestId = `notify-${id}-${Date.now()}`;
+  const steer = JSON.stringify({
+    id: requestId,
+    type: "steer",
     message: trimmed,
   });
 
-  agent.process.stdin.write(prompt + "\n");
+  agent.process.stdin.write(steer + "\n");
   agent.output.push(
     JSON.stringify({
       type: "parent_notify",
+      mode: "steer",
+      requestId,
       text: trimmed,
       timestamp: Date.now(),
     }),
   );
-  agent.lastAction = "📨 guidance sent";
+  agent.lastAction = "📨 steer sent";
   agent.lastActivity = Date.now();
   updateSubAgentStatus();
   if (watchedAgentIds.has(id)) {
