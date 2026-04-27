@@ -40,12 +40,13 @@ let watchAllMode = false; // True when watching all agents (auto-add new ones)
 let configuredAgents: Record<string, SubagentProfile> = {};
 let maxActiveSubagents: number | undefined = undefined;
 let defaultTimeoutSeconds: number | undefined = undefined;
+let allowNestedSubagents = false;
 let startupAgentGuideSent = false;
 
 const DEFAULT_REPORT_COUNT = 3;
 const MAX_REPORT_COUNT = 50;
 const DEFAULT_WAIT_TIMEOUT_MS = 15000;
-const MAX_WAIT_TIMEOUT_MS = 120000;
+const MAX_WAIT_TIMEOUT_MS = 60000;
 const MAX_ACTIVE_SUBAGENTS_CAP = 100;
 const MAX_DEFAULT_TIMEOUT_SECONDS = 86400;
 
@@ -59,6 +60,7 @@ type PiSubagentSettings = {
   agents?: Record<string, SubagentProfile>;
   max_active_subagents?: number;
   default_timeout_seconds?: number;
+  allow_nested_subagents?: boolean;
 };
 
 function readJsonFile(path: string): Record<string, unknown> {
@@ -89,6 +91,17 @@ function normalizeDefaultTimeoutSeconds(raw: unknown): number | undefined {
   if (normalized < 1) return undefined;
 
   return Math.min(normalized, MAX_DEFAULT_TIMEOUT_SECONDS);
+}
+
+function normalizeAllowNestedSubagents(raw: unknown): boolean | undefined {
+  if (typeof raw !== "boolean") return undefined;
+  return raw;
+}
+
+function isTruthyEnv(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function getPiSubagentSettings(cwd: string): PiSubagentSettings {
@@ -168,11 +181,20 @@ function getPiSubagentSettings(cwd: string): PiSubagentSettings {
     globalSubagentObj.default_timeout_seconds,
   );
 
+  const projectAllowNestedSubagents = normalizeAllowNestedSubagents(
+    projectSubagentObj.allow_nested_subagents,
+  );
+  const globalAllowNestedSubagents = normalizeAllowNestedSubagents(
+    globalSubagentObj.allow_nested_subagents,
+  );
+
   return {
     agents: mergedAgents,
     max_active_subagents: projectMaxActive ?? globalMaxActive,
     default_timeout_seconds:
       projectDefaultTimeoutSeconds ?? globalDefaultTimeoutSeconds,
+    allow_nested_subagents:
+      projectAllowNestedSubagents ?? globalAllowNestedSubagents ?? false,
   };
 }
 
@@ -181,6 +203,7 @@ function refreshConfiguredAgents(cwd: string): void {
   configuredAgents = settings.agents || {};
   maxActiveSubagents = settings.max_active_subagents;
   defaultTimeoutSeconds = settings.default_timeout_seconds;
+  allowNestedSubagents = settings.allow_nested_subagents ?? false;
 }
 
 function resolveSubagentProfile(
@@ -231,6 +254,9 @@ function getConfiguredAgentsText(
   const timeoutText = defaultTimeoutSeconds
     ? `Default timeout: ${defaultTimeoutSeconds}s`
     : "Default timeout: (none)";
+  const nestedText = allowNestedSubagents
+    ? "Nested sub-agents: enabled"
+    : "Nested sub-agents: disabled (default)";
 
   const agentLines = entries
     .map(({ name, profile }) => {
@@ -239,7 +265,7 @@ function getConfiguredAgentsText(
     })
     .join("\n");
 
-  return `${limitText}\n${timeoutText}\n\n${agentLines}`;
+  return `${limitText}\n${timeoutText}\n${nestedText}\n\n${agentLines}`;
 }
 
 function getTaskTitle(task: string, maxLength = 80): string {
@@ -303,9 +329,15 @@ function spawnSubAgent(
 
   const args = ["--mode", "rpc", "--no-session", "--model", model];
 
+  const childEnv: NodeJS.ProcessEnv = { ...process.env };
+  if (!allowNestedSubagents) {
+    childEnv.PI_SUBAGENT_DISABLE_RECURSION = "1";
+  }
+
   const proc = spawn("pi", args, {
     stdio: ["pipe", "pipe", "pipe"],
     detached: false,
+    env: childEnv,
   });
 
   // Handle spawn errors
@@ -844,7 +876,10 @@ async function waitForSubAgent(
   };
 }
 
-function getAgentReportData(id: string, requestedCount?: number): {
+function getAgentReportData(
+  id: string,
+  requestedCount?: number,
+): {
   found: boolean;
   agentId: string;
   status?: SubAgent["status"];
@@ -941,7 +976,11 @@ function notifySubAgent(
   text: string,
 ): {
   ok: boolean;
-  reason?: "not_found" | "already_finished" | "stdin_unavailable" | "empty_message";
+  reason?:
+    | "not_found"
+    | "already_finished"
+    | "stdin_unavailable"
+    | "empty_message";
 } {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -985,6 +1024,10 @@ function notifySubAgent(
 }
 
 export default function (pi: ExtensionAPI) {
+  if (isTruthyEnv(process.env.PI_SUBAGENT_DISABLE_RECURSION)) {
+    return;
+  }
+
   // Register /subagent command
   pi.registerCommand("subagent", {
     description: "Spawn and manage sub-agents",
@@ -1197,7 +1240,10 @@ export default function (pi: ExtensionAPI) {
 
           const result = notifySubAgent(targetId, text);
           if (result.ok) {
-            ctx.ui.notify(`Sent guidance notification to sub-agent ${targetId}`, "info");
+            ctx.ui.notify(
+              `Sent guidance notification to sub-agent ${targetId}`,
+              "info",
+            );
             return;
           }
 
@@ -1693,7 +1739,8 @@ export default function (pi: ExtensionAPI) {
         },
         timeout_ms: {
           type: "number",
-          description: "How long to wait before returning. Defaults to 15000ms.",
+          description:
+            "How long to wait before returning. Defaults to 15000ms.",
           default: DEFAULT_WAIT_TIMEOUT_MS,
         },
       },
@@ -1706,7 +1753,16 @@ export default function (pi: ExtensionAPI) {
       onUpdate,
       ctx,
     ) {
-      const timeoutMs = normalizeWaitTimeout(params.timeout_ms);
+      const requestedTimeoutMs = params.timeout_ms;
+      const timeoutMs = normalizeWaitTimeout(requestedTimeoutMs);
+      const waitLimitApplied =
+        typeof requestedTimeoutMs === "number" &&
+        Number.isFinite(requestedTimeoutMs) &&
+        Math.trunc(requestedTimeoutMs) > MAX_WAIT_TIMEOUT_MS;
+      const waitLimitNote = waitLimitApplied
+        ? `Requested timeout ${Math.trunc(requestedTimeoutMs!)}ms exceeds max ${MAX_WAIT_TIMEOUT_MS}ms; using ${MAX_WAIT_TIMEOUT_MS}ms.`
+        : undefined;
+
       const result = await waitForSubAgent(params.agent_id, timeoutMs, signal);
 
       if (!result.found) {
@@ -1714,7 +1770,9 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `Sub-agent ${params.agent_id} not found`,
+              text: waitLimitNote
+                ? `${waitLimitNote}\nSub-agent ${params.agent_id} not found`
+                : `Sub-agent ${params.agent_id} not found`,
             },
           ],
           isError: true,
@@ -1722,16 +1780,19 @@ export default function (pi: ExtensionAPI) {
             agentId: params.agent_id,
             found: false,
             done: false,
+            waitLimitApplied,
+            maxWaitMs: MAX_WAIT_TIMEOUT_MS,
           },
         };
       }
 
       if (!result.done) {
+        const baseText = `Sub-agent ${params.agent_id} is still ${result.status} after waiting ${timeoutMs}ms.`;
         return {
           content: [
             {
               type: "text",
-              text: `Sub-agent ${params.agent_id} is still ${result.status} after waiting ${timeoutMs}ms.`,
+              text: waitLimitNote ? `${waitLimitNote}\n${baseText}` : baseText,
             },
           ],
           details: {
@@ -1741,6 +1802,8 @@ export default function (pi: ExtensionAPI) {
             status: result.status,
             timedOut: result.timedOut,
             retryAfterMs: DEFAULT_WAIT_TIMEOUT_MS,
+            waitLimitApplied,
+            maxWaitMs: MAX_WAIT_TIMEOUT_MS,
           },
         };
       }
@@ -1749,14 +1812,17 @@ export default function (pi: ExtensionAPI) {
         result.status === "completed"
           ? "completed successfully"
           : "finished with error";
+      const baseDoneText =
+        `Sub-agent ${params.agent_id} ${doneText}.\n` +
+        `Use \`subagent_report\` for full details if needed.`;
 
       return {
         content: [
           {
             type: "text",
-            text:
-              `Sub-agent ${params.agent_id} ${doneText}.\n` +
-              `Use \`subagent_report\` for full details if needed.`,
+            text: waitLimitNote
+              ? `${waitLimitNote}\n${baseDoneText}`
+              : baseDoneText,
           },
         ],
         details: {
@@ -1765,6 +1831,8 @@ export default function (pi: ExtensionAPI) {
           done: true,
           status: result.status,
           exitCode: result.exitCode,
+          waitLimitApplied,
+          maxWaitMs: MAX_WAIT_TIMEOUT_MS,
         },
       };
     },

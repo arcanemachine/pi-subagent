@@ -60,7 +60,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 ### Tools
 
 - `subagent_spawn` - Spawn a single sub-agent (required `agent`)
-- `subagent_wait` - Wait briefly for completion (`timeout_ms` optional, default: 15000)
+- `subagent_wait` - Wait briefly for completion (`timeout_ms` optional, default: 15000, max: 60000)
 - `subagent_report` - Get recent activity entries (`count` optional, default: 3)
 - `subagent_status` - Get structured current status (`agent_id` optional)
 - `subagent_notify` - Send follow-up guidance to a running sub-agent
@@ -90,13 +90,14 @@ Use the main pi settings files:
 
 Project settings override global settings.
 
-Example (`extra_context`, `max_active_subagents`, and `default_timeout_seconds` are optional):
+Example (`extra_context`, `max_active_subagents`, `default_timeout_seconds`, and `allow_nested_subagents` are optional):
 
 ```json
 {
   "pi-subagent": {
     "max_active_subagents": 4,
     "default_timeout_seconds": 600,
+    "allow_nested_subagents": false,
     "agents": {
       "simple": {
         "model": "provider/some-simple-model",
@@ -120,6 +121,8 @@ Example (`extra_context`, `max_active_subagents`, and `default_timeout_seconds` 
 Project settings override global settings by agent key. `max_active_subagents` is a hard cap on concurrently running sub-agents; spawn requests above the cap are rejected (not queued).
 
 `default_timeout_seconds` controls an automatic timeout notification for each spawned sub-agent. When the timeout is reached, the parent sends guidance asking the sub-agent to report progress so far and finish up. The default is no timeout.
+
+`allow_nested_subagents` controls whether spawned sub-agents can use this extension's own sub-agent tools. Default is `false` (nested sub-agents disabled). Set to `true` only if you explicitly want recursive fan-out.
 
 On session start, the extension sends an internal guidance message listing configured agent types and the active concurrency cap so tool-calling models can pick valid `agent` values.
 
