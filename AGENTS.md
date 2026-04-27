@@ -2,7 +2,7 @@
 
 ## Workflow
 
-Commit when a task is completed.
+ALWAYS commit when a task is completed.
 
 ## Pre-commit
 
