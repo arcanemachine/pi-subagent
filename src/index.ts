@@ -452,6 +452,30 @@ function buildAgentStatusSnapshot(agent: SubAgent) {
   };
 }
 
+function buildCompactAgentStatusSnapshot(agent: SubAgent) {
+  const snapshot = buildAgentStatusSnapshot(agent);
+  return {
+    id: snapshot.id,
+    status: snapshot.status,
+    agentType: snapshot.agentType,
+    taskTitle: snapshot.taskTitle,
+    durationSec: snapshot.durationSec,
+    progressPercent: snapshot.progressPercent,
+  };
+}
+
+function buildStatusSummary() {
+  const activeCount = getActiveAgentCount();
+  return {
+    activeCount,
+    maxActiveSubagents: maxActiveSubagents ?? null,
+    remainingSlots: maxActiveSubagents
+      ? Math.max(0, maxActiveSubagents - activeCount)
+      : null,
+    totalKnownAgents: activeAgents.size,
+  };
+}
+
 function updateSubAgentStatus() {
   if (!currentCtx) return;
 
@@ -826,6 +850,47 @@ function killSubAgent(id: string): {
   return { ok: true };
 }
 
+function notifySubAgent(
+  id: string,
+  text: string,
+): {
+  ok: boolean;
+  reason?: "not_found" | "already_finished" | "stdin_unavailable" | "empty_message";
+} {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return { ok: false, reason: "empty_message" };
+  }
+
+  const agent = activeAgents.get(id);
+  if (!agent) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  if (agent.status === "completed" || agent.status === "error") {
+    return { ok: false, reason: "already_finished" };
+  }
+
+  if (!agent.process.stdin || agent.process.stdin.destroyed) {
+    return { ok: false, reason: "stdin_unavailable" };
+  }
+
+  const prompt = JSON.stringify({
+    type: "prompt",
+    message: trimmed,
+  });
+
+  agent.process.stdin.write(prompt + "\n");
+  agent.lastAction = "📨 guidance sent";
+  agent.lastActivity = Date.now();
+  updateSubAgentStatus();
+  if (watchedAgentIds.has(id)) {
+    updateWatchWidget();
+  }
+
+  return { ok: true };
+}
+
 export default function (pi: ExtensionAPI) {
   // Register /subagent command
   pi.registerCommand("subagent", {
@@ -855,6 +920,10 @@ export default function (pi: ExtensionAPI) {
           value: "append",
           label: "append <id> [count] — Add report to context",
         },
+        {
+          value: "notify",
+          label: "notify <id> <text> — Send guidance to a running sub-agent",
+        },
       ];
 
       const spawnItems = Object.entries(configuredAgents).map(
@@ -883,7 +952,7 @@ export default function (pi: ExtensionAPI) {
       const trimmedArgs = args.trim();
       if (!trimmedArgs) {
         ctx.ui.notify(
-          "Usage: /subagent spawn:<agent>|report|status|append|list|kill|killall|prune|show|hide",
+          "Usage: /subagent spawn:<agent>|report|status|append|notify|list|kill|killall|prune|show|hide",
           "error",
         );
         return;
@@ -965,30 +1034,33 @@ export default function (pi: ExtensionAPI) {
           if (statusId) {
             const agent = activeAgents.get(statusId);
             if (!agent) {
-              ctx.ui.notify(`Sub-agent ${statusId} not found`, "error");
+              const notFound = {
+                found: false,
+                error: {
+                  code: "not_found",
+                  message: `Sub-agent ${statusId} not found`,
+                  agentId: statusId,
+                },
+              };
+              ctx.ui.notify(JSON.stringify(notFound, null, 2), "error");
               return;
             }
 
-            const snapshot = buildAgentStatusSnapshot(agent);
-            ctx.ui.notify(
-              `Sub-agent ${statusId} status:\n${JSON.stringify(snapshot, null, 2)}`,
-              "info",
-            );
+            const targeted = {
+              found: true,
+              agent: buildAgentStatusSnapshot(agent),
+            };
+            ctx.ui.notify(JSON.stringify(targeted, null, 2), "info");
             return;
           }
 
-          if (activeAgents.size === 0) {
-            ctx.ui.notify("No sub-agents found", "info");
-            return;
-          }
-
-          const snapshots = Array.from(activeAgents.values()).map((agent) =>
-            buildAgentStatusSnapshot(agent),
-          );
-          ctx.ui.notify(
-            `Sub-agent status:\n${JSON.stringify(snapshots, null, 2)}`,
-            "info",
-          );
+          const status = {
+            summary: buildStatusSummary(),
+            agents: Array.from(activeAgents.values()).map((agent) =>
+              buildCompactAgentStatusSnapshot(agent),
+            ),
+          };
+          ctx.ui.notify(JSON.stringify(status, null, 2), "info");
           return;
         }
 
@@ -1019,6 +1091,46 @@ export default function (pi: ExtensionAPI) {
             "info",
           );
           break;
+        }
+
+        case "notify": {
+          const targetId = rest[0];
+          const text = rest.slice(1).join(" ");
+
+          if (!targetId || !text.trim()) {
+            ctx.ui.notify("Usage: /subagent notify <id> <text>", "error");
+            return;
+          }
+
+          const result = notifySubAgent(targetId, text);
+          if (result.ok) {
+            ctx.ui.notify(`Sent guidance notification to sub-agent ${targetId}`, "info");
+            return;
+          }
+
+          if (result.reason === "already_finished") {
+            ctx.ui.notify(
+              `Sub-agent ${targetId} already finished. Start a new one to continue.`,
+              "warning",
+            );
+            return;
+          }
+
+          if (result.reason === "stdin_unavailable") {
+            ctx.ui.notify(
+              `Sub-agent ${targetId} cannot receive messages right now.`,
+              "error",
+            );
+            return;
+          }
+
+          if (result.reason === "empty_message") {
+            ctx.ui.notify("Message text cannot be empty", "error");
+            return;
+          }
+
+          ctx.ui.notify(`Sub-agent ${targetId} not found`, "error");
+          return;
         }
 
         case "list":
@@ -1115,7 +1227,7 @@ export default function (pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent spawn:<agent> <task> | report|status|append|list|kill|killall|prune|show|hide",
+            "Usage: /subagent spawn:<agent> <task> | report|status|append|notify|list|kill|killall|prune|show|hide",
             "error",
           );
       }
@@ -1278,52 +1390,128 @@ export default function (pi: ExtensionAPI) {
       if (params.agent_id) {
         const agent = activeAgents.get(params.agent_id);
         if (!agent) {
+          const notFound = {
+            found: false,
+            error: {
+              code: "not_found",
+              message: `Sub-agent ${params.agent_id} not found`,
+              agentId: params.agent_id,
+            },
+          };
+
           return {
             content: [
               {
                 type: "text",
-                text: `Sub-agent ${params.agent_id} not found`,
+                text: JSON.stringify(notFound, null, 2),
               },
             ],
             isError: true,
-            details: {
-              found: false,
-              agentId: params.agent_id,
-            },
+            details: notFound,
           };
         }
 
-        const snapshot = buildAgentStatusSnapshot(agent);
+        const targeted = {
+          found: true,
+          agent: buildAgentStatusSnapshot(agent),
+        };
+
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(snapshot, null, 2),
+              text: JSON.stringify(targeted, null, 2),
             },
           ],
-          details: {
-            found: true,
-            agent: snapshot,
-          },
+          details: targeted,
         };
       }
 
-      const snapshots = Array.from(activeAgents.values()).map((agent) =>
-        buildAgentStatusSnapshot(agent),
-      );
+      const status = {
+        summary: buildStatusSummary(),
+        agents: Array.from(activeAgents.values()).map((agent) =>
+          buildCompactAgentStatusSnapshot(agent),
+        ),
+      };
 
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(snapshots, null, 2),
+            text: JSON.stringify(status, null, 2),
+          },
+        ],
+        details: status,
+      };
+    },
+  });
+
+  // Tool: Send a follow-up notification to a running sub-agent
+  pi.registerTool({
+    name: "subagent_notify",
+    label: "Notify Sub-Agent",
+    description:
+      "Send guidance to a running sub-agent by ID. " +
+      "Useful for follow-up instructions during long tasks.",
+    parameters: {
+      type: "object",
+      properties: {
+        agent_id: {
+          type: "string",
+          description: "The sub-agent ID to message",
+        },
+        text: {
+          type: "string",
+          description: "Guidance text to send to the running sub-agent",
+        },
+      },
+      required: ["agent_id", "text"],
+    } as any,
+    async execute(
+      toolCallId,
+      params: { agent_id: string; text: string },
+      signal,
+      onUpdate,
+      ctx,
+    ) {
+      const result = notifySubAgent(params.agent_id, params.text);
+
+      if (!result.ok) {
+        const message =
+          result.reason === "already_finished"
+            ? `Sub-agent ${params.agent_id} already finished. Start a new one to continue.`
+            : result.reason === "stdin_unavailable"
+              ? `Sub-agent ${params.agent_id} cannot receive messages right now.`
+              : result.reason === "empty_message"
+                ? "Message text cannot be empty"
+                : `Sub-agent ${params.agent_id} not found`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: message,
+            },
+          ],
+          isError: true,
+          details: {
+            sent: false,
+            reason: result.reason,
+            agentId: params.agent_id,
+          },
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Sent guidance notification to sub-agent ${params.agent_id}`,
           },
         ],
         details: {
-          found: true,
-          maxActiveSubagents,
-          activeCount: getActiveAgentCount(),
-          agents: snapshots,
+          sent: true,
+          agentId: params.agent_id,
         },
       };
     },

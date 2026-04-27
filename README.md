@@ -49,6 +49,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `/subagent report <id> [count]` - View recent activity entries (default: last 3)
 - `/subagent status [id]` - View structured live status for one/all sub-agents
 - `/subagent append <id> [count]` - Add recent activity report to conversation context
+- `/subagent notify <id> <text>` - Send follow-up guidance to a running sub-agent
 - `/subagent list` - List all sub-agents
 - `/subagent kill <id>` - Kill a specific sub-agent
 - `/subagent killall` - Kill all sub-agents
@@ -62,6 +63,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `subagent_wait` - Wait briefly for completion (`timeout_ms` optional, default: 5000)
 - `subagent_report` - Get recent activity entries (`count` optional, default: 3)
 - `subagent_status` - Get structured current status (`agent_id` optional)
+- `subagent_notify` - Send follow-up guidance to a running sub-agent
 - `subagent_kill` - Kill a specific sub-agent by ID
 - `subagent_list_types` - List configured agent types (name/model/when_to_use)
 - `subagent_spawn_parallel` - Spawn multiple sub-agents and wait for all (required per-task `agent`)
