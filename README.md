@@ -50,10 +50,9 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `/subagent status [id]` - View structured live status for one/all sub-agents
 - `/subagent append <id> [count]` - Add recent activity report to conversation context
 - `/subagent notify <id> <text>` - Send follow-up guidance to a running sub-agent
-- `/subagent list` - List all sub-agents
 - `/subagent kill <id>` - Kill a specific sub-agent
 - `/subagent killall` - Kill all sub-agents
-- `/subagent prune` - Remove completed sub-agents from list
+- `/subagent prune` - Remove completed sub-agents
 - `/subagent show [id]` - Watch sub-agent(s) in widget (no ID = all)
 - `/subagent hide [id]` - Stop watching sub-agent(s) (no ID = all)
 

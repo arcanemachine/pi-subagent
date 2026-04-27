@@ -1071,7 +1071,6 @@ export default function (pi: ExtensionAPI) {
           value: "status",
           label: "status [id] — Show current structured status",
         },
-        { value: "list", label: "list — List all sub-agents" },
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
         { value: "killall", label: "killall — Kill all sub-agents" },
         {
@@ -1116,7 +1115,7 @@ export default function (pi: ExtensionAPI) {
       const trimmedArgs = args.trim();
       if (!trimmedArgs) {
         ctx.ui.notify(
-          "Usage: /subagent spawn:<agent>|report|status|append|notify|list|kill|killall|prune|show|hide",
+          "Usage: /subagent spawn:<agent>|report|status|append|notify|kill|killall|prune|show|hide",
           "error",
         );
         return;
@@ -1300,20 +1299,6 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        case "list":
-          if (activeAgents.size === 0) {
-            ctx.ui.notify("No active sub-agents", "info");
-          } else {
-            const list = Array.from(activeAgents.entries())
-              .map(
-                ([id, a]) =>
-                  `${id}: ${a.status} | ${a.agentType || "unknown"} | ${a.model || "(unknown)"} | Task: ${a.taskTitle}`,
-              )
-              .join("\n");
-            ctx.ui.notify(`Active sub-agents:\n${list}`, "info");
-          }
-          break;
-
         case "kill":
           if (!subArgs) {
             ctx.ui.notify("Usage: /subagent kill <id>", "error");
@@ -1394,7 +1379,7 @@ export default function (pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent spawn:<agent> <task> | report|status|append|notify|list|kill|killall|prune|show|hide",
+            "Usage: /subagent spawn:<agent> <task> | report|status|append|notify|kill|killall|prune|show|hide",
             "error",
           );
       }
