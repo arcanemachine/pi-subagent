@@ -573,6 +573,14 @@ function buildTranscriptLines(
         transcript.push(
           `🔧 ${event.toolName}: ${JSON.stringify(event.args).slice(0, 100)}`,
         );
+      } else if (event.type === "parent_notify") {
+        if (currentMessage.trim()) {
+          transcript.push(`💬 ${currentMessage.trim()}`);
+          currentMessage = "";
+        }
+        const notifyText =
+          typeof event.text === "string" ? event.text : "(no text)";
+        transcript.push(`📨 Parent notify: ${notifyText}`);
       } else if (
         event.type === "message_update" &&
         event.assistantMessageEvent
@@ -649,6 +657,15 @@ function buildReportEntries(agent: SubAgent): string[] {
         entries.push(
           `🔧 ${event.toolName}: ${JSON.stringify(event.args).slice(0, 100)}`,
         );
+      } else if (event.type === "parent_notify") {
+        if (currentMessage.trim()) {
+          entries.push(`💬 ${currentMessage.trim()}`);
+          currentMessage = "";
+        }
+
+        const notifyText =
+          typeof event.text === "string" ? event.text : "(no text)";
+        entries.push(`📨 Parent notify: ${notifyText}`);
       } else if (
         event.type === "message_update" &&
         event.assistantMessageEvent
@@ -950,6 +967,13 @@ function notifySubAgent(
   });
 
   agent.process.stdin.write(prompt + "\n");
+  agent.output.push(
+    JSON.stringify({
+      type: "parent_notify",
+      text: trimmed,
+      timestamp: Date.now(),
+    }),
+  );
   agent.lastAction = "📨 guidance sent";
   agent.lastActivity = Date.now();
   updateSubAgentStatus();
