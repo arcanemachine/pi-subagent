@@ -827,15 +827,27 @@ async function waitForSubAgent(
   };
 }
 
-function getAgentReport(id: string, requestedCount?: number): string {
+function getAgentReportData(id: string, requestedCount?: number): {
+  found: boolean;
+  agentId: string;
+  status?: SubAgent["status"];
+  done?: boolean;
+  diagnostics: string[];
+  recentEntries: string[];
+  count: number;
+} {
   const agent = activeAgents.get(id);
-  if (!agent) return `Agent ${id} not found`;
-
   const count = normalizeReportCount(requestedCount);
 
-  const duration = agent.endTime
-    ? Math.floor((agent.endTime - agent.startTime) / 1000)
-    : Math.floor((Date.now() - agent.startTime) / 1000);
+  if (!agent) {
+    return {
+      found: false,
+      agentId: id,
+      diagnostics: [],
+      recentEntries: [],
+      count,
+    };
+  }
 
   const noResponseEver =
     !agent.receivedEvent &&
@@ -862,38 +874,27 @@ function getAgentReport(id: string, requestedCount?: number): string {
   const entries = buildReportEntries(agent);
   const recentEntries = entries.slice(-count);
 
-  let exitCodeText = "(unknown)";
-  if (agent.exitCode !== undefined) {
-    exitCodeText = String(agent.exitCode);
-  } else if (agent.status === "starting" || agent.status === "running") {
-    exitCodeText = "(running)";
-  } else if (agent.status === "completed" || agent.status === "error") {
-    exitCodeText = "(not yet reported)";
-  }
+  return {
+    found: true,
+    agentId: id,
+    status: agent.status,
+    done: agent.status === "completed" || agent.status === "error",
+    diagnostics,
+    recentEntries,
+    count,
+  };
+}
 
-  const currentTool =
-    agent.status === "starting" || agent.status === "running"
-      ? agent.currentTool || "(idle)"
-      : undefined;
+function getAgentReport(id: string, requestedCount?: number): string {
+  const report = getAgentReportData(id, requestedCount);
+  if (!report.found) return `Agent ${id} not found`;
 
-  return `
-## Sub-Agent ${id}
+  const diagnosticsBlock =
+    report.diagnostics.length > 0
+      ? `${report.diagnostics.join("\n\n")}\n\n`
+      : "";
 
-**Task:** ${agent.task}
-**Task title:** ${agent.taskTitle}
-**Agent type:** ${agent.agentType || "(unknown)"}
-**Model:** ${agent.model || "(unknown)"}
-**Extra context:** ${agent.extraContext ? "configured" : "none"}
-**Status:** ${agent.status}
-**Duration:** ${duration}s
-**Exit code:** ${exitCodeText}${currentTool ? `\n**Current tool:** ${currentTool}` : ""}
-
-### Diagnostics
-${diagnostics.join("\n\n") || "(none)"}
-
-### Recent activity (last ${count})
-${recentEntries.join("\n\n") || "(no activity yet)"}
-`;
+  return `## Sub-Agent ${id} recent activity (last ${report.count})\n\n${diagnosticsBlock}${report.recentEntries.join("\n\n") || "(no activity yet)"}`;
 }
 
 function killSubAgent(id: string): {
@@ -1383,7 +1384,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // Tool: Get a detailed report of what a sub-agent did
+  // Tool: Get recent activity entries for a sub-agent
   pi.registerTool({
     name: "subagent_report",
     label: "Sub-Agent Report",
@@ -1414,19 +1415,26 @@ export default function (pi: ExtensionAPI) {
       onUpdate,
       ctx,
     ) {
-      const report = getAgentReport(
-        params.agent_id,
-        normalizeReportCount(params.count),
-      );
+      const normalizedCount = normalizeReportCount(params.count);
+      const reportData = getAgentReportData(params.agent_id, normalizedCount);
+      const reportText = getAgentReport(params.agent_id, normalizedCount);
 
       return {
         content: [
           {
             type: "text",
-            text: report,
+            text: reportText,
           },
         ],
-        details: { agentId: params.agent_id },
+        details: {
+          agentId: params.agent_id,
+          found: reportData.found,
+          done: reportData.done,
+          status: reportData.status,
+          diagnostics: reportData.diagnostics,
+          count: reportData.count,
+          recentEntries: reportData.recentEntries,
+        },
       };
     },
   });
