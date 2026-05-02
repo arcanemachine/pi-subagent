@@ -578,11 +578,13 @@ function buildStatusSummary() {
 function updateSubAgentStatus() {
   if (!currentCtx) return;
 
-  if (activeAgents.size === 0) {
+  const activeCount = getActiveAgentCount();
+  if (activeCount === 0) {
     currentCtx.ui.setStatus("subagent", undefined);
-  } else {
-    currentCtx.ui.setStatus("subagent", getStatusText());
+    return;
   }
+
+  currentCtx.ui.setStatus("subagent", getStatusText());
 }
 
 function buildTranscriptLines(
