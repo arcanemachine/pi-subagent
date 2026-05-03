@@ -16,6 +16,7 @@
     "watch": "tsc --watch"
   },
   "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.72.1",
     "@types/node": "^25.3.3",
     "typescript": "^5.9.3"
   },
