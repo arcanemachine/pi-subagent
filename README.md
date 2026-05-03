@@ -152,8 +152,19 @@ Completed agents remain visible until you run `/subagent hide`.
 
 ## Development
 
+For local development and verification:
+
+```bash
+npm install
+npm run typecheck
+npm run build
+npm run format
 ```
-cd /workspace/projects/pi-subagent
+
+To run directly in pi:
+
+```bash
+cd /workspace/projects/pi/pi-subagent
 pi -e ./src/index.ts
 ```
 

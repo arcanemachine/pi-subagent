@@ -13,11 +13,14 @@
   },
   "scripts": {
     "build": "tsc",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write src/index.ts README.md"
   },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "^0.72.1",
     "@types/node": "^25.3.3",
+    "prettier": "^3.8.3",
     "typescript": "^5.9.3"
   },
   "peerDependencies": {
