@@ -43,7 +43,9 @@ let maxActiveSubagents: number | undefined = undefined;
 let defaultTimeoutSeconds: number | undefined = undefined;
 let allowNestedSubagents = false;
 let startupAgentGuideSent = false;
-let sendCompletionMessage: ((content: string) => void) | null = null;
+let sendCompletionMessage:
+  | ((content: string, details?: Record<string, unknown>) => void)
+  | null = null;
 
 const DEFAULT_REPORT_COUNT = 3;
 const MAX_REPORT_COUNT = 50;
@@ -337,6 +339,15 @@ function notifyAgentCompletion(agent: SubAgent) {
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
       ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}`,
+    {
+      agentId: agent.id,
+      status: agent.status,
+      taskTitle: agent.taskTitle,
+      agentType: agent.agentType,
+      model: agent.model,
+      durationSec,
+      exitCode: agent.exitCode,
+    },
   );
   agent.completionNotified = true;
 }
@@ -1082,12 +1093,27 @@ function notifySubAgent(
 }
 
 export default function (pi: ExtensionAPI) {
-  sendCompletionMessage = (content: string) => {
-    pi.sendMessage({
-      customType: "subagent-complete",
-      content,
-      display: true,
-    });
+  sendCompletionMessage = (
+    content: string,
+    details?: Record<string, unknown>,
+  ) => {
+    const shouldTriggerTurn =
+      !!currentCtx && currentCtx.isIdle() && !currentCtx.hasPendingMessages();
+
+    pi.sendMessage(
+      {
+        customType: "subagent-complete",
+        content,
+        display: true,
+        details,
+      },
+      shouldTriggerTurn
+        ? {
+            triggerTurn: true,
+            deliverAs: "followUp",
+          }
+        : undefined,
+    );
   };
   if (isTruthyEnv(process.env.PI_SUBAGENT_DISABLE_RECURSION)) {
     return;
