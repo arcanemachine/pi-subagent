@@ -1086,7 +1086,7 @@ export default function (pi: ExtensionAPI) {
     pi.sendMessage({
       customType: "subagent-complete",
       content,
-      display: false,
+      display: true,
     });
   };
   if (isTruthyEnv(process.env.PI_SUBAGENT_DISABLE_RECURSION)) {
