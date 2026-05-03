@@ -5,7 +5,7 @@ A pi extension that enables spawning sub-agents via RPC for parallel task execut
 ## Features
 
 - Spawn pi sub-agents as separate processes via RPC
-- Fire-and-forget or wait for results from sub-agents
+- Fire-and-forget sub-agents with automatic completion messages
 - Manage multiple concurrent sub-agents
 - Track status and output of running sub-agents
 - Live widget to watch sub-agent activity in real-time
@@ -65,7 +65,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `subagent_notify` - Send follow-up guidance to a running sub-agent
 - `subagent_kill` - Kill a specific sub-agent by ID
 - `subagent_list_types` - List configured agent types (name/model/when_to_use)
-- `subagent_spawn_parallel` - Spawn multiple sub-agents and return immediately (required per-task `agent`)
+- `subagent_spawn_parallel` - Spawn multiple sub-agents, return immediately, and receive completion messages (required per-task `agent`)
 
 `count` is clamped to a safe maximum (50).
 

@@ -30,6 +30,7 @@ interface SubAgent {
   timeoutAt?: number;
   timeoutNotified?: boolean;
   timeoutHandle?: NodeJS.Timeout;
+  completionNotified?: boolean;
 }
 
 const activeAgents = new Map<string, SubAgent>();
@@ -42,6 +43,7 @@ let maxActiveSubagents: number | undefined = undefined;
 let defaultTimeoutSeconds: number | undefined = undefined;
 let allowNestedSubagents = false;
 let startupAgentGuideSent = false;
+let sendCompletionMessage: ((content: string) => void) | null = null;
 
 const DEFAULT_REPORT_COUNT = 3;
 const MAX_REPORT_COUNT = 50;
@@ -319,6 +321,26 @@ function scheduleSubAgentTimeout(agent: SubAgent): void {
   }, defaultTimeoutSeconds * 1000);
 }
 
+function notifyAgentCompletion(agent: SubAgent) {
+  if (agent.completionNotified) return;
+  if (agent.status !== "completed" && agent.status !== "error") return;
+
+  const durationSec = Math.max(
+    0,
+    Math.round(((agent.endTime || Date.now()) - agent.startTime) / 1000),
+  );
+  const statusEmoji = agent.status === "completed" ? "✅" : "❌";
+  const statusText = agent.status === "completed" ? "completed" : "errored";
+  const exitText =
+    agent.exitCode !== undefined ? ` | exit=${agent.exitCode}` : "";
+
+  sendCompletionMessage?.(
+    `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
+      ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}`,
+  );
+  agent.completionNotified = true;
+}
+
 function spawnSubAgent(
   task: string,
   model: string,
@@ -410,6 +432,7 @@ function spawnSubAgent(
           agent.endTime = Date.now();
           agent.currentTool = undefined;
           agent.lastAction = "finished";
+          notifyAgentCompletion(agent);
           // Force immediate widget update on completion
           updateSubAgentStatus();
           // Update watch widget if being watched
@@ -449,7 +472,12 @@ function spawnSubAgent(
       agent.status = "error";
       agent.endTime = Date.now();
       agent.lastAction = `exited with code ${code ?? "unknown"}`;
+    } else if (agent.status !== "completed" && agent.status !== "error") {
+      agent.status = "completed";
+      agent.endTime = Date.now();
+      agent.lastAction = "process exited";
     }
+    notifyAgentCompletion(agent);
     updateSubAgentStatus();
     // Update watch widget if being watched
     if (watchedAgentIds.has(id)) {
@@ -1054,6 +1082,13 @@ function notifySubAgent(
 }
 
 export default function (pi: ExtensionAPI) {
+  sendCompletionMessage = (content: string) => {
+    pi.sendMessage({
+      customType: "subagent-complete",
+      content,
+      display: false,
+    });
+  };
   if (isTruthyEnv(process.env.PI_SUBAGENT_DISABLE_RECURSION)) {
     return;
   }
@@ -2011,7 +2046,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Spawn multiple sub-agents to work on different tasks in parallel. " +
       "Each task must include an `agent` key that matches a configured type in `pi-subagent.agents`. " +
-      "Returns immediately after spawning. Use subagent_wait/subagent_status/subagent_report to track progress.",
+      "Returns immediately after spawning and sends automatic completion messages. Use subagent_report/subagent_status for deeper inspection.",
     parameters: {
       type: "object",
       properties: {
@@ -2101,7 +2136,7 @@ export default function (pi: ExtensionAPI) {
             type: "text",
             text:
               `Spawned ${agents.length} sub-agents and returning immediately. ` +
-              "Use subagent_wait/subagent_status/subagent_report to track progress.",
+              "You will get automatic completion messages; use subagent_report/subagent_status for details.",
           },
         ],
         details: {
@@ -2138,7 +2173,7 @@ export default function (pi: ExtensionAPI) {
       pi.sendMessage({
         customType: "subagent-agents",
         content:
-          "Sub-agent types loaded from settings. Use `subagent_spawn` with required `agent` (or `/subagent spawn:<agent> ...`).\n\n" +
+          "Sub-agent types loaded from settings. Use `subagent_spawn` with required `agent` (or `/subagent spawn:<agent> ...`). Completion messages are automatic.\n\n" +
           configuredAgentsText,
         display: false,
       });
