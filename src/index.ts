@@ -1914,14 +1914,14 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // Tool: Spawn multiple sub-agents in parallel and wait for all
+  // Tool: Spawn multiple sub-agents in parallel
   pi.registerTool({
     name: "subagent_spawn_parallel",
     label: "Spawn Parallel Sub-Agents",
     description:
       "Spawn multiple sub-agents to work on different tasks in parallel. " +
       "Each task must include an `agent` key that matches a configured type in `pi-subagent.agents`. " +
-      "Returns when all complete. Great for analyzing multiple files or components.",
+      "Returns immediately after spawning. Use subagent_wait/subagent_status/subagent_report to track progress.",
     parameters: {
       type: "object",
       properties: {
@@ -1944,11 +1944,6 @@ export default function (pi: ExtensionAPI) {
           },
           description: "Array of task descriptors, each with task + agent type",
         },
-        timeout_ms: {
-          type: "number",
-          description: "Max time to wait for all to complete",
-          default: 120000,
-        },
       },
       required: ["tasks"],
     } as any,
@@ -1956,7 +1951,6 @@ export default function (pi: ExtensionAPI) {
       toolCallId,
       params: {
         tasks: Array<{ task: string; agent: string }>;
-        timeout_ms?: number;
       },
       signal,
       onUpdate,
@@ -2011,44 +2005,13 @@ export default function (pi: ExtensionAPI) {
         details: { agentCount: agents.length },
       });
 
-      // Wait for all to complete
-      const timeout = params.timeout_ms || 120000;
-      const startTime = Date.now();
-
-      while (true) {
-        const allDone = agents.every(
-          (a) => a.status === "completed" || a.status === "error",
-        );
-        if (allDone) break;
-
-        if (Date.now() - startTime > timeout) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Timeout after ${timeout}ms. Some sub-agents still running.`,
-              },
-            ],
-            isError: true,
-            details: {
-              agents: agents.map((a) => ({ id: a.id, status: a.status })),
-            },
-          };
-        }
-
-        await new Promise((r) => setTimeout(r, 100));
-      }
-
-      // Generate reports for all
-      const reports = agents.map((a) => getAgentReport(a.id));
-
       return {
         content: [
           {
             type: "text",
             text:
-              `## All ${agents.length} Sub-Agents Complete\n\n` +
-              reports.join("\n---\n"),
+              `Spawned ${agents.length} sub-agents and returning immediately. ` +
+              "Use subagent_wait/subagent_status/subagent_report to track progress.",
           },
         ],
         details: {

@@ -65,7 +65,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `subagent_notify` - Send follow-up guidance to a running sub-agent
 - `subagent_kill` - Kill a specific sub-agent by ID
 - `subagent_list_types` - List configured agent types (name/model/when_to_use)
-- `subagent_spawn_parallel` - Spawn multiple sub-agents and wait for all (required per-task `agent`)
+- `subagent_spawn_parallel` - Spawn multiple sub-agents and return immediately (required per-task `agent`)
 
 `count` is clamped to a safe maximum (50).
 
