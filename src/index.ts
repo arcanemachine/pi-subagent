@@ -49,8 +49,6 @@ let sendCompletionMessage:
 
 const DEFAULT_REPORT_COUNT = 3;
 const MAX_REPORT_COUNT = 50;
-const DEFAULT_WAIT_TIMEOUT_MS = 15000;
-const MAX_WAIT_TIMEOUT_MS = 60000;
 const MAX_ACTIVE_SUBAGENTS_CAP = 100;
 const MAX_DEFAULT_TIMEOUT_SECONDS = 86400;
 
@@ -715,16 +713,6 @@ function parseReportCountFromArg(rawCount: string | undefined): {
   return { count: Math.min(parsed, MAX_REPORT_COUNT) };
 }
 
-function normalizeWaitTimeout(rawTimeout: number | undefined): number {
-  if (rawTimeout === undefined) return DEFAULT_WAIT_TIMEOUT_MS;
-  if (!Number.isFinite(rawTimeout)) return DEFAULT_WAIT_TIMEOUT_MS;
-
-  const timeout = Math.trunc(rawTimeout);
-  if (timeout < 1) return DEFAULT_WAIT_TIMEOUT_MS;
-
-  return Math.min(timeout, MAX_WAIT_TIMEOUT_MS);
-}
-
 function buildReportEntries(agent: SubAgent): string[] {
   const entries: string[] = [];
   let currentMessage = "";
@@ -888,57 +876,6 @@ function updateWatchWidget() {
   }
 
   currentCtx.ui.setWidget("subagent-watch", widgetLines);
-}
-
-async function waitForSubAgent(
-  id: string,
-  timeoutMs = DEFAULT_WAIT_TIMEOUT_MS,
-  signal?: AbortSignal,
-): Promise<
-  | { found: false }
-  | {
-      found: true;
-      done: boolean;
-      status: SubAgent["status"];
-      exitCode?: number;
-      timedOut: boolean;
-    }
-> {
-  const agent = activeAgents.get(id);
-  if (!agent) return { found: false };
-
-  const startTime = Date.now();
-  while (agent.status !== "completed" && agent.status !== "error") {
-    if (signal?.aborted) {
-      return {
-        found: true,
-        done: false,
-        status: agent.status,
-        exitCode: agent.exitCode,
-        timedOut: false,
-      };
-    }
-
-    if (Date.now() - startTime >= timeoutMs) {
-      return {
-        found: true,
-        done: false,
-        status: agent.status,
-        exitCode: agent.exitCode,
-        timedOut: true,
-      };
-    }
-
-    await new Promise((r) => setTimeout(r, 100));
-  }
-
-  return {
-    found: true,
-    done: true,
-    status: agent.status,
-    exitCode: agent.exitCode,
-    timedOut: false,
-  };
 }
 
 function getAgentReportData(
@@ -1456,8 +1393,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Spawn a sub-agent to work on a task in parallel. " +
       "`agent` is required and must match a configured key in settings `pi-subagent.agents`. " +
-      "The sub-agent will appear in the active agents widget. " +
-      "Use subagent_wait to wait for completion and subagent_report to inspect details.",
+      "Returns immediately. Completion messages are automatic; use subagent_report/subagent_status for deeper inspection.",
     parameters: {
       type: "object",
       properties: {
@@ -1799,211 +1735,6 @@ export default function (pi: ExtensionAPI) {
         details: {
           killed: true,
           agentId: params.agent_id,
-        },
-      };
-    },
-  });
-
-  // Tool: Wait for a sub-agent (or all active sub-agents) to complete
-  pi.registerTool({
-    name: "subagent_wait",
-    label: "Wait for Sub-Agent",
-    description:
-      "Wait for a sub-agent to finish without tight polling. " +
-      "If `agent_id` is omitted, waits for all currently active sub-agents.",
-    parameters: {
-      type: "object",
-      properties: {
-        agent_id: {
-          type: "string",
-          description:
-            "The sub-agent ID to wait for. If omitted, waits for all active sub-agents.",
-        },
-        timeout_ms: {
-          type: "number",
-          description:
-            "How long to wait before returning. Defaults to 15000ms.",
-          default: DEFAULT_WAIT_TIMEOUT_MS,
-        },
-      },
-      required: [],
-    } as any,
-    async execute(
-      toolCallId,
-      params: { agent_id?: string; timeout_ms?: number },
-      signal,
-      onUpdate,
-      ctx,
-    ) {
-      const requestedTimeoutMs = params.timeout_ms;
-      const timeoutMs = normalizeWaitTimeout(requestedTimeoutMs);
-      const waitLimitApplied =
-        typeof requestedTimeoutMs === "number" &&
-        Number.isFinite(requestedTimeoutMs) &&
-        Math.trunc(requestedTimeoutMs) > MAX_WAIT_TIMEOUT_MS;
-      const waitLimitNote = waitLimitApplied
-        ? `Requested timeout ${Math.trunc(requestedTimeoutMs!)}ms exceeds max ${MAX_WAIT_TIMEOUT_MS}ms; using ${MAX_WAIT_TIMEOUT_MS}ms.`
-        : undefined;
-
-      if (params.agent_id) {
-        const result = await waitForSubAgent(
-          params.agent_id,
-          timeoutMs,
-          signal,
-        );
-
-        if (!result.found) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: waitLimitNote
-                  ? `${waitLimitNote}\nSub-agent ${params.agent_id} not found`
-                  : `Sub-agent ${params.agent_id} not found`,
-              },
-            ],
-            isError: true,
-            details: {
-              scope: "single",
-              agentId: params.agent_id,
-              found: false,
-              done: false,
-              waitLimitApplied,
-              maxWaitMs: MAX_WAIT_TIMEOUT_MS,
-            },
-          };
-        }
-
-        if (!result.done) {
-          const baseText = `Sub-agent ${params.agent_id} is still ${result.status} after waiting ${timeoutMs}ms.`;
-          return {
-            content: [
-              {
-                type: "text",
-                text: waitLimitNote
-                  ? `${waitLimitNote}\n${baseText}`
-                  : baseText,
-              },
-            ],
-            details: {
-              scope: "single",
-              agentId: params.agent_id,
-              found: true,
-              done: false,
-              status: result.status,
-              timedOut: result.timedOut,
-              retryAfterMs: DEFAULT_WAIT_TIMEOUT_MS,
-              waitLimitApplied,
-              maxWaitMs: MAX_WAIT_TIMEOUT_MS,
-            },
-          };
-        }
-
-        const doneText =
-          result.status === "completed"
-            ? "completed successfully"
-            : "finished with error";
-        const baseDoneText =
-          `Sub-agent ${params.agent_id} ${doneText}.\n` +
-          `Use \`subagent_report\` for full details if needed.`;
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: waitLimitNote
-                ? `${waitLimitNote}\n${baseDoneText}`
-                : baseDoneText,
-            },
-          ],
-          details: {
-            scope: "single",
-            agentId: params.agent_id,
-            found: true,
-            done: true,
-            status: result.status,
-            exitCode: result.exitCode,
-            waitLimitApplied,
-            maxWaitMs: MAX_WAIT_TIMEOUT_MS,
-          },
-        };
-      }
-
-      const activeIds = Array.from(activeAgents.values())
-        .filter((a) => a.status === "starting" || a.status === "running")
-        .map((a) => a.id);
-
-      if (activeIds.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: waitLimitNote
-                ? `${waitLimitNote}\nNo active sub-agents to wait for.`
-                : "No active sub-agents to wait for.",
-            },
-          ],
-          details: {
-            scope: "all",
-            done: true,
-            agentCount: 0,
-            waitLimitApplied,
-            maxWaitMs: MAX_WAIT_TIMEOUT_MS,
-          },
-        };
-      }
-
-      const startTime = Date.now();
-      while (true) {
-        const allDone = activeIds.every((id) => {
-          const agent = activeAgents.get(id);
-          return (
-            !agent || agent.status === "completed" || agent.status === "error"
-          );
-        });
-
-        if (allDone) break;
-        if (signal?.aborted) break;
-        if (Date.now() - startTime >= timeoutMs) break;
-
-        await new Promise((r) => setTimeout(r, 100));
-      }
-
-      const statuses = activeIds.map((id) => {
-        const agent = activeAgents.get(id);
-        if (!agent)
-          return { id, found: false, done: false, status: "missing" as const };
-        const done = agent.status === "completed" || agent.status === "error";
-        return {
-          id,
-          found: true,
-          done,
-          status: agent.status,
-          exitCode: agent.exitCode,
-        };
-      });
-
-      const doneCount = statuses.filter((s) => s.done).length;
-      const allDone = doneCount === statuses.length;
-      const baseText = allDone
-        ? `All ${statuses.length} sub-agents completed.`
-        : `${doneCount}/${statuses.length} sub-agents completed after waiting ${timeoutMs}ms.`;
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: waitLimitNote ? `${waitLimitNote}\n${baseText}` : baseText,
-          },
-        ],
-        details: {
-          scope: "all",
-          done: allDone,
-          timedOut: !allDone,
-          waitedForIds: activeIds,
-          agents: statuses,
-          waitLimitApplied,
-          maxWaitMs: MAX_WAIT_TIMEOUT_MS,
         },
       };
     },
