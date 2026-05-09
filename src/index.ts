@@ -30,6 +30,7 @@ interface SubAgent {
   timeoutAt?: number;
   timeoutNotified?: boolean;
   timeoutHandle?: NodeJS.Timeout;
+  timeoutEscalationHandle?: NodeJS.Timeout;
   completionNotified?: boolean;
   lastStateChangeAt?: number;
 }
@@ -353,10 +354,15 @@ function transitionAgentStatus(
 }
 
 function clearSubAgentTimeout(agent: SubAgent): void {
-  if (!agent.timeoutHandle) return;
+  if (agent.timeoutHandle) {
+    clearTimeout(agent.timeoutHandle);
+    agent.timeoutHandle = undefined;
+  }
 
-  clearTimeout(agent.timeoutHandle);
-  agent.timeoutHandle = undefined;
+  if (agent.timeoutEscalationHandle) {
+    clearTimeout(agent.timeoutEscalationHandle);
+    agent.timeoutEscalationHandle = undefined;
+  }
 }
 
 function scheduleSubAgentTimeout(agent: SubAgent): void {
@@ -379,6 +385,31 @@ function scheduleSubAgentTimeout(agent: SubAgent): void {
     if (result.ok) {
       agent.timeoutNotified = true;
       agent.lastAction = `⏰ timeout reached (${defaultTimeoutSeconds}s)`;
+      sendCompletionMessage?.(
+        `⏰ Sub-agent ${agent.id} hit time budget (${defaultTimeoutSeconds}s). Finalize request sent.`,
+        {
+          agentId: agent.id,
+          timeoutSeconds: defaultTimeoutSeconds,
+          timeoutStage: "initial",
+        },
+      );
+
+      agent.timeoutEscalationHandle = setTimeout(() => {
+        agent.timeoutEscalationHandle = undefined;
+
+        if (agent.status === "completed" || agent.status === "error") {
+          return;
+        }
+
+        sendCompletionMessage?.(
+          `⚠️ Sub-agent ${agent.id} is still running after timeout finalize request. Consider checking status and using subagent_kill if needed.`,
+          {
+            agentId: agent.id,
+            timeoutSeconds: defaultTimeoutSeconds,
+            timeoutStage: "escalation",
+          },
+        );
+      }, 30000);
     }
   }, defaultTimeoutSeconds * 1000);
 }
@@ -410,6 +441,8 @@ function notifyAgentCompletion(agent: SubAgent) {
       model: agent.model,
       durationSec,
       exitCode: agent.exitCode,
+      timedOut: !!agent.timeoutNotified,
+      timeoutSeconds: agent.timeoutSeconds,
       finalReport: reportData.finalReport,
       confidenceRating: reportData.confidenceRating,
       reviewChecklist: reportData.reviewChecklist,
