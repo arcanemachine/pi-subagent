@@ -52,6 +52,7 @@ const DEFAULT_REPORT_COUNT = 3;
 const MAX_REPORT_COUNT = 50;
 const MAX_ACTIVE_SUBAGENTS_CAP = 100;
 const MAX_DEFAULT_TIMEOUT_SECONDS = 86400;
+let timeoutEscalationDelayMs = 30000;
 
 type SubagentProfile = {
   model: string;
@@ -409,7 +410,7 @@ function scheduleSubAgentTimeout(agent: SubAgent): void {
             timeoutStage: "escalation",
           },
         );
-      }, 30000);
+      }, timeoutEscalationDelayMs);
     }
   }, defaultTimeoutSeconds * 1000);
 }
@@ -996,12 +997,8 @@ function extractFinalReportJsonBlock(text: string): string | null {
   return afterMarker.slice(openBraceIndex, closeBraceIndex + 1).trim();
 }
 
-function parseFinalReport(agent: SubAgent): FinalReport | null {
-  const assistantText = extractAssistantText(agent);
-  const candidateTexts = [
-    assistantText,
-    buildReportEntries(agent).join("\n"),
-  ].filter((value) => value.trim().length > 0);
+function parseFinalReportFromTexts(texts: string[]): FinalReport | null {
+  const candidateTexts = texts.filter((value) => value.trim().length > 0);
 
   for (const text of candidateTexts) {
     const rawJson = extractFinalReportJsonBlock(text);
@@ -1016,6 +1013,14 @@ function parseFinalReport(agent: SubAgent): FinalReport | null {
   }
 
   return null;
+}
+
+function parseFinalReport(agent: SubAgent): FinalReport | null {
+  const assistantText = extractAssistantText(agent);
+  return parseFinalReportFromTexts([
+    assistantText,
+    buildReportEntries(agent).join("\n"),
+  ]);
 }
 
 function buildConfidenceRating(
@@ -2220,3 +2225,67 @@ export default function (pi: ExtensionAPI) {
     }
   });
 }
+
+export const __test = {
+  resetState() {
+    for (const [, agent] of activeAgents) {
+      clearSubAgentTimeout(agent);
+    }
+    activeAgents.clear();
+    watchedAgentIds.clear();
+    watchAllMode = false;
+    nextAgentId = 1;
+    defaultTimeoutSeconds = undefined;
+    sendCompletionMessage = null;
+  },
+
+  parseFinalReportFromTexts,
+  buildConfidenceRating,
+  getAgentReportData,
+
+  setDefaultTimeoutSeconds(seconds: number | undefined) {
+    defaultTimeoutSeconds = seconds;
+  },
+
+  setTimeoutEscalationDelayMs(delayMs: number) {
+    timeoutEscalationDelayMs = delayMs;
+  },
+
+  setCompletionSender(
+    sender:
+      | ((content: string, details?: Record<string, unknown>) => void)
+      | null,
+  ) {
+    sendCompletionMessage = sender;
+  },
+
+  addMockAgent(id: string, overrides: Partial<SubAgent> = {}) {
+    const noop = () => {};
+    const mockProcess = {
+      kill: noop,
+      stdin: {
+        destroyed: false,
+        write: noop,
+      },
+    } as unknown as ChildProcess;
+
+    const agent: SubAgent = {
+      id,
+      process: mockProcess,
+      task: "test task",
+      taskTitle: "test task",
+      status: "running",
+      output: [],
+      startTime: Date.now(),
+      lastActivity: Date.now(),
+      receivedEvent: true,
+      ...overrides,
+    };
+
+    activeAgents.set(id, agent);
+    return agent;
+  },
+
+  scheduleSubAgentTimeout,
+  notifyAgentCompletion,
+};

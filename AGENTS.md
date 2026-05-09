@@ -8,8 +8,9 @@ ALWAYS commit when a task is completed.
 
 ```bash
 npm install
+npm test
 npx tsc --noEmit
-npx prettier --write src/index.ts
+npx prettier --write src/index.ts src/index.test.ts
 ```
 
 ## Commit Style

@@ -15,12 +15,14 @@
     "build": "tsc",
     "watch": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "format": "prettier --write src/index.ts README.md"
+    "test": "tsx --test src/index.test.ts",
+    "format": "prettier --write src/index.ts src/index.test.ts README.md"
   },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "^0.72.1",
     "@types/node": "^25.3.3",
     "prettier": "^3.8.3",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
   "peerDependencies": {
