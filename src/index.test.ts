@@ -77,6 +77,18 @@ test("timeout only escalates to parent", async () => {
   assert.equal(sent[0]?.details?.timeoutStage, "escalation");
 });
 
+test("manual timeout override is applied", () => {
+  __test.resetState();
+  __test.setDefaultTimeoutSeconds(180);
+
+  const agent = __test.addMockAgent("T-manual");
+  __test.scheduleSubAgentTimeout(agent, 70);
+
+  assert.equal(agent.timeoutSeconds, 70);
+  assert.ok(agent.timeoutAt);
+  assert.ok(Math.abs((agent.timeoutAt || 0) - (agent.startTime + 70000)) < 1000);
+});
+
 test("sends wrap-up warning to subagent 60 seconds before timeout", async () => {
   __test.resetState();
   __test.setDefaultTimeoutSeconds(61);

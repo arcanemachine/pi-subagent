@@ -123,6 +123,16 @@ function normalizeDefaultTimeoutSeconds(raw: unknown): number | undefined {
   return Math.min(normalized, MAX_DEFAULT_TIMEOUT_SECONDS);
 }
 
+function normalizeManualTimeoutSeconds(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+
+  const normalized = Math.trunc(raw);
+  if (normalized < 1) return undefined;
+
+  return Math.min(normalized, MAX_DEFAULT_TIMEOUT_SECONDS);
+}
+
 function normalizeAllowNestedSubagents(raw: unknown): boolean | undefined {
   if (typeof raw !== "boolean") return undefined;
   return raw;
@@ -373,15 +383,19 @@ function clearSubAgentTimeout(agent: SubAgent): void {
   }
 }
 
-function scheduleSubAgentTimeout(agent: SubAgent): void {
-  if (!defaultTimeoutSeconds) return;
+function scheduleSubAgentTimeout(
+  agent: SubAgent,
+  timeoutSecondsOverride?: number,
+): void {
+  const timeoutSeconds = timeoutSecondsOverride ?? defaultTimeoutSeconds;
+  if (!timeoutSeconds) return;
 
-  agent.timeoutSeconds = defaultTimeoutSeconds;
-  agent.timeoutAt = agent.startTime + defaultTimeoutSeconds * 1000;
+  agent.timeoutSeconds = timeoutSeconds;
+  agent.timeoutAt = agent.startTime + timeoutSeconds * 1000;
 
-  if (defaultTimeoutSeconds > TIMEOUT_WRAP_UP_WARNING_SECONDS) {
+  if (timeoutSeconds > TIMEOUT_WRAP_UP_WARNING_SECONDS) {
     const warningDelayMs =
-      (defaultTimeoutSeconds - TIMEOUT_WRAP_UP_WARNING_SECONDS) * 1000;
+      (timeoutSeconds - TIMEOUT_WRAP_UP_WARNING_SECONDS) * 1000;
     agent.timeoutWarningHandle = setTimeout(() => {
       agent.timeoutWarningHandle = undefined;
 
@@ -408,12 +422,12 @@ function scheduleSubAgentTimeout(agent: SubAgent): void {
     }
 
     const timeoutText =
-      `Time budget reached (${defaultTimeoutSeconds}s). ` +
+      `Time budget reached (${timeoutSeconds}s). ` +
       "Do not continue expanding scope. Report what you completed, what remains, then finish now with the required final report block.";
     const result = notifySubAgent(agent.id, timeoutText);
     if (result.ok) {
       agent.timeoutNotified = true;
-      agent.lastAction = `⏰ timeout reached (${defaultTimeoutSeconds}s)`;
+      agent.lastAction = `⏰ timeout reached (${timeoutSeconds}s)`;
 
       agent.timeoutEscalationHandle = setTimeout(() => {
         agent.timeoutEscalationHandle = undefined;
@@ -431,13 +445,13 @@ function scheduleSubAgentTimeout(agent: SubAgent): void {
           `⚠️ Sub-agent ${agent.id} is still running after timeout finalize request. Consider checking status and using subagent_kill if needed.`,
           {
             agentId: agent.id,
-            timeoutSeconds: defaultTimeoutSeconds,
+            timeoutSeconds: timeoutSeconds,
             timeoutStage: "escalation",
           },
         );
       }, timeoutEscalationDelayMs);
     }
-  }, defaultTimeoutSeconds * 1000);
+  }, timeoutSeconds * 1000);
 }
 
 function notifyAgentCompletion(agent: SubAgent) {
@@ -482,6 +496,7 @@ function spawnSubAgent(
   model: string,
   agentType: string,
   extraContext?: string,
+  timeoutSecondsOverride?: number,
 ): SubAgent {
   const id = String(nextAgentId++);
 
@@ -625,7 +640,7 @@ function spawnSubAgent(
   proc.stdin?.write(prompt + "\n");
 
   activeAgents.set(id, agent);
-  scheduleSubAgentTimeout(agent);
+  scheduleSubAgentTimeout(agent, timeoutSecondsOverride);
 
   // Auto-add to watch list if in watch-all mode
   if (watchAllMode) {
@@ -1467,8 +1482,29 @@ export default function (pi: ExtensionAPI) {
         const agentType = subcommand.slice("spawn:".length).trim();
 
         if (!agentType || !subArgs) {
-          ctx.ui.notify("Usage: /subagent spawn:<agent> <task>", "error");
+          ctx.ui.notify(
+            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task>",
+            "error",
+          );
           return;
+        }
+
+        let taskText = subArgs;
+        let manualTimeoutSeconds: number | undefined;
+        const timeoutMatch = subArgs.match(/^timeout:(\S+)\s+([\s\S]+)$/i);
+        if (timeoutMatch) {
+          const parsedTimeout = normalizeManualTimeoutSeconds(
+            Number(timeoutMatch[1]),
+          );
+          if (!parsedTimeout) {
+            ctx.ui.notify(
+              `Invalid timeout '${timeoutMatch[1]}'. Use a positive integer in seconds.`,
+              "error",
+            );
+            return;
+          }
+          manualTimeoutSeconds = parsedTimeout;
+          taskText = timeoutMatch[2];
         }
 
         try {
@@ -1480,10 +1516,11 @@ export default function (pi: ExtensionAPI) {
 
           const profile = resolveSubagentProfile(agentType, ctx);
           const agent = spawnSubAgent(
-            subArgs,
+            taskText,
             profile.model,
             agentType,
             profile.extra_context,
+            manualTimeoutSeconds,
           );
           ctx.ui.notify(`Spawned sub-agent ${agent.id}`, "info");
 
@@ -1494,7 +1531,8 @@ export default function (pi: ExtensionAPI) {
               `🚀 Spawned sub-agent **${agent.id}**\n` +
               `Task: ${agent.task}\n` +
               `Agent type: ${agent.agentType || "(unknown)"}\n` +
-              `Model: ${agent.model || "(unknown)"}`,
+              `Model: ${agent.model || "(unknown)"}\n` +
+              `Timeout: ${agent.timeoutSeconds ? `${agent.timeoutSeconds}s` : "(none)"}`,
             display: true,
           });
         } catch (error: unknown) {
@@ -1740,7 +1778,7 @@ export default function (pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent spawn:<agent> <task> | report|status|append|notify|redirect|kill|killall|prune|show|hide",
+            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task> | report|status|append|notify|redirect|kill|killall|prune|show|hide",
             "error",
           );
       }
@@ -1767,12 +1805,17 @@ export default function (pi: ExtensionAPI) {
           description:
             "Configured sub-agent type key from settings (for example: simple, smart, code-review)",
         },
+        timeout_seconds: {
+          type: "number",
+          description:
+            "Optional per-run timeout in seconds. Overrides default timeout for this sub-agent only.",
+        },
       },
       required: ["task", "agent"],
     } as any,
     async execute(
       toolCallId,
-      params: { task: string; agent: string },
+      params: { task: string; agent: string; timeout_seconds?: number },
       signal,
       onUpdate,
       ctx,
@@ -1793,12 +1836,33 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
+      const manualTimeoutSeconds = normalizeManualTimeoutSeconds(
+        params.timeout_seconds,
+      );
+      if (params.timeout_seconds !== undefined && !manualTimeoutSeconds) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Invalid timeout_seconds. Use a positive integer in seconds.",
+            },
+          ],
+          isError: true,
+          details: {
+            rejected: true,
+            reason: "invalid_timeout_seconds",
+            timeoutSeconds: params.timeout_seconds,
+          },
+        };
+      }
+
       const profile = resolveSubagentProfile(params.agent, ctx);
       const agent = spawnSubAgent(
         params.task,
         profile.model,
         params.agent,
         profile.extra_context,
+        manualTimeoutSeconds,
       );
 
       return {
@@ -1809,7 +1873,8 @@ export default function (pi: ExtensionAPI) {
               `🚀 Spawned sub-agent **${agent.id}**\n` +
               `Task: ${agent.task}\n` +
               `Agent type: ${agent.agentType || "(unknown)"}\n` +
-              `Model: ${agent.model || "(unknown)"}\n\n` +
+              `Model: ${agent.model || "(unknown)"}\n` +
+              `Timeout: ${agent.timeoutSeconds ? `${agent.timeoutSeconds}s` : "(none)"}\n\n` +
               `The sub-agent is now running in parallel. Recommended workflow:\n` +
               `- Let it run hands-off\n` +
               `- Use status/redirect/kill only if needed\n` +
@@ -1822,6 +1887,7 @@ export default function (pi: ExtensionAPI) {
           taskTitle: agent.taskTitle,
           agentType: agent.agentType,
           model: agent.model,
+          timeoutSeconds: agent.timeoutSeconds,
         },
       };
     },
@@ -2128,6 +2194,11 @@ export default function (pi: ExtensionAPI) {
                 description:
                   "Configured sub-agent type key from settings (for example: simple, smart, code-review)",
               },
+              timeout_seconds: {
+                type: "number",
+                description:
+                  "Optional per-run timeout in seconds for this task only.",
+              },
             },
             required: ["task", "agent"],
           },
@@ -2139,7 +2210,11 @@ export default function (pi: ExtensionAPI) {
     async execute(
       toolCallId,
       params: {
-        tasks: Array<{ task: string; agent: string }>;
+        tasks: Array<{
+          task: string;
+          agent: string;
+          timeout_seconds?: number;
+        }>;
       },
       signal,
       onUpdate,
@@ -2166,6 +2241,27 @@ export default function (pi: ExtensionAPI) {
 
       // Spawn all agents
       for (const taskSpec of params.tasks) {
+        const manualTimeoutSeconds = normalizeManualTimeoutSeconds(
+          taskSpec.timeout_seconds,
+        );
+        if (taskSpec.timeout_seconds !== undefined && !manualTimeoutSeconds) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Invalid timeout_seconds for task '${taskSpec.task.slice(0, 40)}'. Use a positive integer in seconds.`,
+              },
+            ],
+            isError: true,
+            details: {
+              rejected: true,
+              reason: "invalid_timeout_seconds",
+              task: taskSpec.task,
+              timeoutSeconds: taskSpec.timeout_seconds,
+            },
+          };
+        }
+
         const profile = resolveSubagentProfile(taskSpec.agent, ctx);
         agents.push(
           spawnSubAgent(
@@ -2173,6 +2269,7 @@ export default function (pi: ExtensionAPI) {
             profile.model,
             taskSpec.agent,
             profile.extra_context,
+            manualTimeoutSeconds,
           ),
         );
       }
