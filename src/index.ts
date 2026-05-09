@@ -42,7 +42,7 @@ let nextAgentId = 1;
 let watchAllMode = false; // True when watching all agents (auto-add new ones)
 let configuredAgents: Record<string, SubagentProfile> = {};
 let maxActiveSubagents: number | undefined = undefined;
-let defaultTimeoutSeconds: number | undefined = undefined;
+let defaultTimeoutSeconds: number | undefined = 180;
 let allowNestedSubagents = false;
 let sendCompletionMessage:
   | ((content: string, details?: Record<string, unknown>) => void)
@@ -230,7 +230,7 @@ function refreshConfiguredAgents(cwd: string): void {
   const settings = getPiSubagentSettings(cwd);
   configuredAgents = settings.agents || {};
   maxActiveSubagents = settings.max_active_subagents;
-  defaultTimeoutSeconds = settings.default_timeout_seconds;
+  defaultTimeoutSeconds = settings.default_timeout_seconds ?? 180;
   allowNestedSubagents = settings.allow_nested_subagents ?? false;
 }
 
@@ -2235,7 +2235,7 @@ export const __test = {
     watchedAgentIds.clear();
     watchAllMode = false;
     nextAgentId = 1;
-    defaultTimeoutSeconds = undefined;
+    defaultTimeoutSeconds = 180;
     sendCompletionMessage = null;
   },
 
