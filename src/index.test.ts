@@ -55,7 +55,7 @@ test("confidence rating flags missing fields", () => {
   assert.ok(rating.warnings.includes("no_tool_activity_logged"));
 });
 
-test("timeout only notifies child agent", async () => {
+test("timeout only escalates to parent", async () => {
   __test.resetState();
   __test.setDefaultTimeoutSeconds(1);
   __test.setTimeoutEscalationDelayMs(25);
@@ -72,7 +72,37 @@ test("timeout only notifies child agent", async () => {
   await wait(1100);
   await wait(40);
 
-  assert.equal(sent.length, 0);
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0]?.content.includes("still running after timeout"));
+  assert.equal(sent[0]?.details?.timeoutStage, "escalation");
+});
+
+test("sends wrap-up warning to subagent 60 seconds before timeout", async () => {
+  __test.resetState();
+  __test.setDefaultTimeoutSeconds(61);
+
+  const agent = __test.addMockAgent("T-warn");
+  __test.scheduleSubAgentTimeout(agent);
+
+  await wait(1100);
+
+  const warning = agent.output
+    .map((entry) => {
+      try {
+        return JSON.parse(entry);
+      } catch {
+        return null;
+      }
+    })
+    .find(
+      (event) =>
+        event?.type === "parent_notify" &&
+        typeof event?.text === "string" &&
+        event.text.includes("You have") &&
+        event.text.includes("60 seconds to finish"),
+    );
+
+  assert.ok(warning, "expected wrap-up warning notification to subagent");
 });
 
 test("completion details include timedOut true after timeout", async () => {

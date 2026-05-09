@@ -29,6 +29,7 @@ interface SubAgent {
   timeoutSeconds?: number;
   timeoutAt?: number;
   timeoutNotified?: boolean;
+  timeoutWarningHandle?: NodeJS.Timeout;
   timeoutHandle?: NodeJS.Timeout;
   timeoutEscalationHandle?: NodeJS.Timeout;
   completionNotified?: boolean;
@@ -52,6 +53,7 @@ const DEFAULT_REPORT_COUNT = 3;
 const MAX_REPORT_COUNT = 50;
 const MAX_ACTIVE_SUBAGENTS_CAP = 100;
 const MAX_DEFAULT_TIMEOUT_SECONDS = 86400;
+const TIMEOUT_WRAP_UP_WARNING_SECONDS = 60;
 let timeoutEscalationDelayMs = 30000;
 
 type SubagentProfile = {
@@ -355,6 +357,11 @@ function transitionAgentStatus(
 }
 
 function clearSubAgentTimeout(agent: SubAgent): void {
+  if (agent.timeoutWarningHandle) {
+    clearTimeout(agent.timeoutWarningHandle);
+    agent.timeoutWarningHandle = undefined;
+  }
+
   if (agent.timeoutHandle) {
     clearTimeout(agent.timeoutHandle);
     agent.timeoutHandle = undefined;
@@ -371,6 +378,27 @@ function scheduleSubAgentTimeout(agent: SubAgent): void {
 
   agent.timeoutSeconds = defaultTimeoutSeconds;
   agent.timeoutAt = agent.startTime + defaultTimeoutSeconds * 1000;
+
+  if (defaultTimeoutSeconds > TIMEOUT_WRAP_UP_WARNING_SECONDS) {
+    const warningDelayMs =
+      (defaultTimeoutSeconds - TIMEOUT_WRAP_UP_WARNING_SECONDS) * 1000;
+    agent.timeoutWarningHandle = setTimeout(() => {
+      agent.timeoutWarningHandle = undefined;
+
+      if (agent.status === "completed" || agent.status === "error") {
+        return;
+      }
+
+      const elapsedSeconds = Math.max(
+        0,
+        Math.floor((Date.now() - agent.startTime) / 1000),
+      );
+      notifySubAgent(
+        agent.id,
+        `You have been running for ${elapsedSeconds} seconds. You have ${TIMEOUT_WRAP_UP_WARNING_SECONDS} seconds to finish your task.`,
+      );
+    }, warningDelayMs);
+  }
 
   agent.timeoutHandle = setTimeout(() => {
     agent.timeoutHandle = undefined;
@@ -397,6 +425,15 @@ function scheduleSubAgentTimeout(agent: SubAgent): void {
         notifySubAgent(
           agent.id,
           "You are still running past the time budget. Stop now and send the required final report block immediately.",
+        );
+
+        sendCompletionMessage?.(
+          `⚠️ Sub-agent ${agent.id} is still running after timeout finalize request. Consider checking status and using subagent_kill if needed.`,
+          {
+            agentId: agent.id,
+            timeoutSeconds: defaultTimeoutSeconds,
+            timeoutStage: "escalation",
+          },
         );
       }, timeoutEscalationDelayMs);
     }
