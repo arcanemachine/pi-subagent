@@ -386,14 +386,6 @@ function scheduleSubAgentTimeout(agent: SubAgent): void {
     if (result.ok) {
       agent.timeoutNotified = true;
       agent.lastAction = `⏰ timeout reached (${defaultTimeoutSeconds}s)`;
-      sendCompletionMessage?.(
-        `⏰ Sub-agent ${agent.id} hit time budget (${defaultTimeoutSeconds}s). Finalize request sent.`,
-        {
-          agentId: agent.id,
-          timeoutSeconds: defaultTimeoutSeconds,
-          timeoutStage: "initial",
-        },
-      );
 
       agent.timeoutEscalationHandle = setTimeout(() => {
         agent.timeoutEscalationHandle = undefined;
@@ -402,13 +394,9 @@ function scheduleSubAgentTimeout(agent: SubAgent): void {
           return;
         }
 
-        sendCompletionMessage?.(
-          `⚠️ Sub-agent ${agent.id} is still running after timeout finalize request. Consider checking status and using subagent_kill if needed.`,
-          {
-            agentId: agent.id,
-            timeoutSeconds: defaultTimeoutSeconds,
-            timeoutStage: "escalation",
-          },
+        notifySubAgent(
+          agent.id,
+          "You are still running past the time budget. Stop now and send the required final report block immediately.",
         );
       }, timeoutEscalationDelayMs);
     }

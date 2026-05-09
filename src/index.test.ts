@@ -55,7 +55,7 @@ test("confidence rating flags missing fields", () => {
   assert.ok(rating.warnings.includes("no_tool_activity_logged"));
 });
 
-test("timeout sends initial and escalation parent notifications", async () => {
+test("timeout only notifies child agent", async () => {
   __test.resetState();
   __test.setDefaultTimeoutSeconds(1);
   __test.setTimeoutEscalationDelayMs(25);
@@ -72,13 +72,7 @@ test("timeout sends initial and escalation parent notifications", async () => {
   await wait(1100);
   await wait(40);
 
-  const initial = sent.find((msg) => msg.content.includes("hit time budget"));
-  const escalation = sent.find((msg) =>
-    msg.content.includes("still running after timeout"),
-  );
-
-  assert.ok(initial, "expected initial timeout notification");
-  assert.ok(escalation, "expected escalation timeout notification");
+  assert.equal(sent.length, 0);
 });
 
 test("completion details include timedOut true after timeout", async () => {
