@@ -78,7 +78,7 @@ type FinalReport = {
   confidence: number | null;
 };
 
-type ReportQuality = {
+type ConfidenceRating = {
   score: number;
   maxScore: number;
   missing: string[];
@@ -402,7 +402,7 @@ function notifyAgentCompletion(agent: SubAgent) {
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
       ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}` +
-      `\nquality: ${reportData.reportQuality.score}/${reportData.reportQuality.maxScore}` +
+      `\nconfidence rating: ${reportData.confidenceRating.score}/${reportData.confidenceRating.maxScore}` +
       `\nsummary: ${reportData.finalReport?.summary || "(missing structured final report block)"}`,
     {
       agentId: agent.id,
@@ -413,7 +413,7 @@ function notifyAgentCompletion(agent: SubAgent) {
       durationSec,
       exitCode: agent.exitCode,
       finalReport: reportData.finalReport,
-      reportQuality: reportData.reportQuality,
+      confidenceRating: reportData.confidenceRating,
       reviewChecklist: reportData.reviewChecklist,
     },
   );
@@ -987,10 +987,10 @@ function parseFinalReport(agent: SubAgent): FinalReport | null {
   return null;
 }
 
-function scoreReportQuality(
+function buildConfidenceRating(
   finalReport: FinalReport | null,
   entries: string[],
-): ReportQuality {
+): ConfidenceRating {
   const missing: string[] = [];
   const warnings: string[] = [];
 
@@ -1138,7 +1138,7 @@ function getAgentReportData(
   recentEntries: string[];
   count: number;
   finalReport: FinalReport | null;
-  reportQuality: ReportQuality;
+  confidenceRating: ConfidenceRating;
   reviewChecklist: string[];
 } {
   const agent = activeAgents.get(id);
@@ -1152,7 +1152,7 @@ function getAgentReportData(
       recentEntries: [],
       count,
       finalReport: null,
-      reportQuality: { score: 0, maxScore: 5, missing: [], warnings: [] },
+      confidenceRating: { score: 0, maxScore: 5, missing: [], warnings: [] },
       reviewChecklist: [],
     };
   }
@@ -1182,7 +1182,7 @@ function getAgentReportData(
   const entries = buildReportEntries(agent);
   const recentEntries = entries.slice(-count);
   const finalReport = parseFinalReport(agent);
-  const reportQuality = scoreReportQuality(finalReport, entries);
+  const confidenceRating = buildConfidenceRating(finalReport, entries);
   const reviewChecklist = buildReviewChecklist(finalReport);
 
   return {
@@ -1194,7 +1194,7 @@ function getAgentReportData(
     recentEntries,
     count,
     finalReport,
-    reportQuality,
+    confidenceRating,
     reviewChecklist,
   };
 }
@@ -1219,10 +1219,10 @@ function getAgentReport(id: string, requestedCount?: number): string {
       ].join("\n")
     : "## Final deliverable\n(missing structured final report block)";
 
-  const qualityBlock = `quality: ${report.reportQuality.score}/${report.reportQuality.maxScore}`;
+  const confidenceBlock = `confidence rating: ${report.confidenceRating.score}/${report.confidenceRating.maxScore}`;
   const checklistBlock = `checklist:\n${report.reviewChecklist.map((item) => `- ${item}`).join("\n")}`;
 
-  return `${finalBlock}\n\n${qualityBlock}\n${checklistBlock}\n\n## Recent activity (last ${report.count})\n\n${diagnosticsBlock}${report.recentEntries.join("\n\n") || "(no activity yet)"}`;
+  return `${finalBlock}\n\n${confidenceBlock}\n${checklistBlock}\n\n## Recent activity (last ${report.count})\n\n${diagnosticsBlock}${report.recentEntries.join("\n\n") || "(no activity yet)"}`;
 }
 
 function killSubAgent(id: string): {
