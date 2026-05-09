@@ -31,6 +31,7 @@ interface SubAgent {
   timeoutNotified?: boolean;
   timeoutHandle?: NodeJS.Timeout;
   completionNotified?: boolean;
+  lastStateChangeAt?: number;
 }
 
 const activeAgents = new Map<string, SubAgent>();
@@ -64,6 +65,31 @@ type PiSubagentSettings = {
   default_timeout_seconds?: number;
   allow_nested_subagents?: boolean;
 };
+
+type CommandValidation = {
+  command: string;
+  status: "pass" | "fail" | "unknown";
+};
+
+type FinalReport = {
+  summary: string;
+  changed_files: string[];
+  commands: CommandValidation[];
+  open_questions: string[];
+  confidence: number | null;
+};
+
+type ReportQuality = {
+  score: number;
+  maxScore: number;
+  missing: string[];
+  warnings: string[];
+};
+
+const FINAL_REPORT_FENCE = "subagent_final_report";
+const STALE_RUNNING_MS = 60_000;
+const SUBAGENT_FINAL_REPORT_INSTRUCTIONS =
+  'When you finish, include a final machine-parseable block exactly once using this fenced JSON format:\n```subagent_final_report\n{"summary":"...","changed_files":["path/file"],"commands":[{"command":"npm test","status":"pass"}],"open_questions":["..."],"confidence":0.0}\n```\nKeep it terse. Use empty arrays when none.';
 
 function readJsonFile(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
@@ -284,9 +310,48 @@ function getTaskTitle(task: string, maxLength = 80): string {
 }
 
 function formatSubagentPrompt(task: string, extraContext?: string): string {
-  if (!extraContext?.trim()) return task;
+  const taskWithContext = !extraContext?.trim()
+    ? task
+    : `Additional context:\n${extraContext.trim()}\n\nTask:\n${task}`;
 
-  return `Additional context:\n${extraContext.trim()}\n\nTask:\n${task}`;
+  return `${taskWithContext}\n\n${SUBAGENT_FINAL_REPORT_INSTRUCTIONS}`;
+}
+
+function buildRedirectMessage(text: string): string {
+  return (
+    `Redirect/focus request:\n${text.trim()}\n\n` +
+    "Acknowledge immediately with one line: REDIRECT_ACK: understood; new plan is <short plan>."
+  );
+}
+
+function transitionAgentStatus(
+  agent: SubAgent,
+  nextStatus: SubAgent["status"],
+  nextAction: string,
+): void {
+  const rank: Record<SubAgent["status"], number> = {
+    starting: 0,
+    running: 1,
+    completed: 2,
+    error: 2,
+  };
+
+  if (rank[nextStatus] < rank[agent.status]) {
+    return;
+  }
+
+  if (agent.status === "completed" || agent.status === "error") {
+    return;
+  }
+
+  agent.status = nextStatus;
+  agent.lastAction = nextAction;
+  agent.lastStateChangeAt = Date.now();
+
+  if (nextStatus === "completed" || nextStatus === "error") {
+    agent.endTime = Date.now();
+    agent.currentTool = undefined;
+  }
 }
 
 function clearSubAgentTimeout(agent: SubAgent): void {
@@ -434,13 +499,9 @@ function spawnSubAgent(
 
         // Update status
         if (event.type === "agent_start") {
-          agent.status = "running";
-          agent.lastAction = "started";
+          transitionAgentStatus(agent, "running", "started");
         } else if (event.type === "agent_end") {
-          agent.status = "completed";
-          agent.endTime = Date.now();
-          agent.currentTool = undefined;
-          agent.lastAction = "finished";
+          transitionAgentStatus(agent, "completed", "finished");
           notifyAgentCompletion(agent);
           // Force immediate widget update on completion
           updateSubAgentStatus();
@@ -478,13 +539,13 @@ function spawnSubAgent(
     clearSubAgentTimeout(agent);
     agent.exitCode = code ?? undefined;
     if (code !== 0 && agent.status !== "completed") {
-      agent.status = "error";
-      agent.endTime = Date.now();
-      agent.lastAction = `exited with code ${code ?? "unknown"}`;
+      transitionAgentStatus(
+        agent,
+        "error",
+        `exited with code ${code ?? "unknown"}`,
+      );
     } else if (agent.status !== "completed" && agent.status !== "error") {
-      agent.status = "completed";
-      agent.endTime = Date.now();
-      agent.lastAction = "process exited";
+      transitionAgentStatus(agent, "completed", "process exited");
     }
     notifyAgentCompletion(agent);
     updateSubAgentStatus();
@@ -561,11 +622,18 @@ function updateProgressFromTextDelta(agent: SubAgent, deltaText: string): void {
   agent.lastAction = `progress ${normalized}%`;
 }
 
+function getBlockedReason(agent: SubAgent, now = Date.now()): string | null {
+  if (agent.status !== "running") return null;
+  if (now - agent.lastActivity < STALE_RUNNING_MS) return null;
+  return "no_recent_activity";
+}
+
 function buildAgentStatusSnapshot(agent: SubAgent) {
   const now = Date.now();
   const durationSec = agent.endTime
     ? Math.floor((agent.endTime - agent.startTime) / 1000)
     : Math.floor((now - agent.startTime) / 1000);
+  const blockedReason = getBlockedReason(agent, now);
 
   return {
     id: agent.id,
@@ -578,7 +646,10 @@ function buildAgentStatusSnapshot(agent: SubAgent) {
     currentTool: agent.currentTool,
     lastAction: agent.lastAction,
     progressPercent: agent.progressPercent,
+    lastMeaningfulEvent: agent.lastAction || "(none)",
     lastActivityMsAgo: Math.max(0, now - agent.lastActivity),
+    blockedReason,
+    etaConfidence: agent.status === "running" ? "low" : "high",
     receivedEvent: agent.receivedEvent,
     exitCode: agent.exitCode,
     timeoutSeconds: agent.timeoutSeconds,
@@ -596,13 +667,31 @@ function buildCompactAgentStatusSnapshot(agent: SubAgent) {
     taskTitle: snapshot.taskTitle,
     durationSec: snapshot.durationSec,
     progressPercent: snapshot.progressPercent,
+    blockedReason: snapshot.blockedReason,
+    lastMeaningfulEvent: snapshot.lastMeaningfulEvent,
+    etaConfidence: snapshot.etaConfidence,
   };
 }
 
 function buildStatusSummary() {
-  const activeCount = getActiveAgentCount();
+  const agents = Array.from(activeAgents.values());
+  const activeCount = agents.filter(
+    (agent) => agent.status === "starting" || agent.status === "running",
+  ).length;
+  const completedCount = agents.filter(
+    (agent) => agent.status === "completed",
+  ).length;
+  const errorCount = agents.filter((agent) => agent.status === "error").length;
+  const blockedCount = agents.filter(
+    (agent) => !!getBlockedReason(agent),
+  ).length;
+
   return {
     activeCount,
+    queuedCount: 0,
+    completedCount,
+    errorCount,
+    blockedCount,
     maxActiveSubagents: maxActiveSubagents ?? null,
     remainingSlots: maxActiveSubagents
       ? Math.max(0, maxActiveSubagents - activeCount)
@@ -784,6 +873,126 @@ function buildReportEntries(agent: SubAgent): string[] {
   return entries;
 }
 
+function extractAssistantText(agent: SubAgent): string {
+  let text = "";
+
+  for (const line of agent.output) {
+    try {
+      const event = JSON.parse(line);
+      if (
+        event.type === "message_update" &&
+        event.assistantMessageEvent?.type === "text_delta"
+      ) {
+        text += event.assistantMessageEvent.delta || "";
+      }
+    } catch {}
+  }
+
+  return text;
+}
+
+function parseFinalReport(agent: SubAgent): FinalReport | null {
+  const assistantText = extractAssistantText(agent);
+  const blockMatch = assistantText.match(
+    new RegExp("```" + FINAL_REPORT_FENCE + "\\s*([\\s\\S]*?)```", "i"),
+  );
+  const rawJson = blockMatch?.[1]?.trim();
+  if (!rawJson) return null;
+
+  try {
+    const parsed = JSON.parse(rawJson) as Partial<FinalReport>;
+    return {
+      summary: typeof parsed.summary === "string" ? parsed.summary.trim() : "",
+      changed_files: Array.isArray(parsed.changed_files)
+        ? parsed.changed_files
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : [],
+      commands: Array.isArray(parsed.commands)
+        ? parsed.commands
+            .map((value) => {
+              if (!value || typeof value !== "object") return null;
+              const candidate = value as Record<string, unknown>;
+              const command =
+                typeof candidate.command === "string"
+                  ? candidate.command.trim()
+                  : "";
+              const rawStatus =
+                typeof candidate.status === "string"
+                  ? candidate.status.toLowerCase()
+                  : "unknown";
+              const status: CommandValidation["status"] =
+                rawStatus === "pass" || rawStatus === "fail"
+                  ? rawStatus
+                  : "unknown";
+              if (!command) return null;
+              return { command, status };
+            })
+            .filter((value): value is CommandValidation => !!value)
+        : [],
+      open_questions: Array.isArray(parsed.open_questions)
+        ? parsed.open_questions
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : [],
+      confidence:
+        typeof parsed.confidence === "number" &&
+        Number.isFinite(parsed.confidence)
+          ? Math.max(0, Math.min(1, parsed.confidence))
+          : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function scoreReportQuality(
+  finalReport: FinalReport | null,
+  entries: string[],
+): ReportQuality {
+  const missing: string[] = [];
+  const warnings: string[] = [];
+
+  if (!finalReport) {
+    missing.push("final_report_block");
+    return { score: 0, maxScore: 5, missing, warnings };
+  }
+
+  let score = 1;
+  if (!finalReport.summary) missing.push("summary");
+  else score++;
+
+  if (finalReport.changed_files.length === 0) missing.push("changed_files");
+  else score++;
+
+  if (finalReport.commands.length === 0) missing.push("commands");
+  else score++;
+
+  if (finalReport.confidence === null) missing.push("confidence");
+  else score++;
+
+  if (!entries.some((entry) => entry.startsWith("🔧"))) {
+    warnings.push("no_tool_activity_logged");
+  }
+
+  return { score, maxScore: 5, missing, warnings };
+}
+
+function buildReviewChecklist(finalReport: FinalReport | null): string[] {
+  if (!finalReport) {
+    return ["[ ] Missing structured final report"];
+  }
+
+  return [
+    `[ ] Review files touched (${finalReport.changed_files.length})`,
+    `[ ] Validate commands (${finalReport.commands.length})`,
+    `[ ] Check risks/open questions (${finalReport.open_questions.length})`,
+    "[ ] Confirm tests/doc updates if expected",
+  ];
+}
+
 function updateWatchWidget() {
   if (!currentCtx) return;
 
@@ -889,6 +1098,9 @@ function getAgentReportData(
   diagnostics: string[];
   recentEntries: string[];
   count: number;
+  finalReport: FinalReport | null;
+  reportQuality: ReportQuality;
+  reviewChecklist: string[];
 } {
   const agent = activeAgents.get(id);
   const count = normalizeReportCount(requestedCount);
@@ -900,6 +1112,9 @@ function getAgentReportData(
       diagnostics: [],
       recentEntries: [],
       count,
+      finalReport: null,
+      reportQuality: { score: 0, maxScore: 5, missing: [], warnings: [] },
+      reviewChecklist: [],
     };
   }
 
@@ -927,6 +1142,9 @@ function getAgentReportData(
 
   const entries = buildReportEntries(agent);
   const recentEntries = entries.slice(-count);
+  const finalReport = parseFinalReport(agent);
+  const reportQuality = scoreReportQuality(finalReport, entries);
+  const reviewChecklist = buildReviewChecklist(finalReport);
 
   return {
     found: true,
@@ -936,6 +1154,9 @@ function getAgentReportData(
     diagnostics,
     recentEntries,
     count,
+    finalReport,
+    reportQuality,
+    reviewChecklist,
   };
 }
 
@@ -948,7 +1169,21 @@ function getAgentReport(id: string, requestedCount?: number): string {
       ? `${report.diagnostics.join("\n\n")}\n\n`
       : "";
 
-  return `## Sub-Agent ${id} recent activity (last ${report.count})\n\n${diagnosticsBlock}${report.recentEntries.join("\n\n") || "(no activity yet)"}`;
+  const finalBlock = report.finalReport
+    ? [
+        "## Final deliverable",
+        `summary: ${report.finalReport.summary || "(empty)"}`,
+        `changed_files: ${report.finalReport.changed_files.join(", ") || "(none)"}`,
+        `commands: ${report.finalReport.commands.map((c) => `${c.command}=${c.status}`).join(", ") || "(none)"}`,
+        `open_questions: ${report.finalReport.open_questions.join(" | ") || "(none)"}`,
+        `confidence: ${report.finalReport.confidence ?? "(missing)"}`,
+      ].join("\n")
+    : "## Final deliverable\n(missing structured final report block)";
+
+  const qualityBlock = `quality: ${report.reportQuality.score}/${report.reportQuality.maxScore}`;
+  const checklistBlock = `checklist:\n${report.reviewChecklist.map((item) => `- ${item}`).join("\n")}`;
+
+  return `${finalBlock}\n\n${qualityBlock}\n${checklistBlock}\n\n## Recent activity (last ${report.count})\n\n${diagnosticsBlock}${report.recentEntries.join("\n\n") || "(no activity yet)"}`;
 }
 
 function killSubAgent(id: string): {
@@ -1087,6 +1322,10 @@ export default function (pi: ExtensionAPI) {
           value: "notify",
           label: "notify <id> <text> — Send guidance to a running sub-agent",
         },
+        {
+          value: "redirect",
+          label: "redirect <id> <focus> — Refocus with explicit ack template",
+        },
       ];
 
       const spawnItems = Object.entries(configuredAgents).map(
@@ -1115,7 +1354,7 @@ export default function (pi: ExtensionAPI) {
       const trimmedArgs = args.trim();
       if (!trimmedArgs) {
         ctx.ui.notify(
-          "Usage: /subagent spawn:<agent>|report|status|append|notify|kill|killall|prune|show|hide",
+          "Usage: /subagent spawn:<agent>|report|status|append|notify|redirect|kill|killall|prune|show|hide",
           "error",
         );
         return;
@@ -1299,6 +1538,28 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
+        case "redirect": {
+          const targetId = rest[0];
+          const focus = rest.slice(1).join(" ");
+
+          if (!targetId || !focus.trim()) {
+            ctx.ui.notify("Usage: /subagent redirect <id> <focus>", "error");
+            return;
+          }
+
+          const result = notifySubAgent(targetId, buildRedirectMessage(focus));
+          if (!result.ok) {
+            ctx.ui.notify(`Failed to redirect sub-agent ${targetId}`, "error");
+            return;
+          }
+
+          ctx.ui.notify(
+            `Redirect sent to sub-agent ${targetId}. Waiting for REDIRECT_ACK in report output.`,
+            "info",
+          );
+          return;
+        }
+
         case "kill":
           if (!subArgs) {
             ctx.ui.notify("Usage: /subagent kill <id>", "error");
@@ -1379,7 +1640,7 @@ export default function (pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent spawn:<agent> <task> | report|status|append|notify|kill|killall|prune|show|hide",
+            "Usage: /subagent spawn:<agent> <task> | report|status|append|notify|redirect|kill|killall|prune|show|hide",
             "error",
           );
       }
@@ -1516,6 +1777,9 @@ export default function (pi: ExtensionAPI) {
           diagnostics: reportData.diagnostics,
           count: reportData.count,
           recentEntries: reportData.recentEntries,
+          finalReport: reportData.finalReport,
+          reportQuality: reportData.reportQuality,
+          reviewChecklist: reportData.reviewChecklist,
         },
       };
     },

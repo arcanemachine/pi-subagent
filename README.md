@@ -50,6 +50,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `/subagent status [id]` - View structured live status for one/all sub-agents
 - `/subagent append <id> [count]` - Add recent activity report to conversation context
 - `/subagent notify <id> <text>` - Send follow-up guidance to a running sub-agent
+- `/subagent redirect <id> <focus>` - Refocus a running sub-agent with explicit ACK template
 - `/subagent kill <id>` - Kill a specific sub-agent
 - `/subagent killall` - Kill all sub-agents
 - `/subagent prune` - Remove completed sub-agents
@@ -67,6 +68,8 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `subagent_spawn_parallel` - Spawn multiple sub-agents, return immediately, and receive completion messages (required per-task `agent`)
 
 `count` is clamped to a safe maximum (50).
+
+Sub-agents are prompted to emit a machine-parseable final JSON block (`subagent_final_report`) containing summary, changed files, commands, open questions, and confidence. `subagent_report` surfaces this first, then compact recent activity, checklist, and quality score.
 
 #### Agent resolution behavior
 
