@@ -891,61 +891,95 @@ function extractAssistantText(agent: SubAgent): string {
   return text;
 }
 
-function parseFinalReport(agent: SubAgent): FinalReport | null {
-  const assistantText = extractAssistantText(agent);
-  const blockMatch = assistantText.match(
+function normalizeParsedFinalReport(parsed: Partial<FinalReport>): FinalReport {
+  return {
+    summary: typeof parsed.summary === "string" ? parsed.summary.trim() : "",
+    changed_files: Array.isArray(parsed.changed_files)
+      ? parsed.changed_files
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : [],
+    commands: Array.isArray(parsed.commands)
+      ? parsed.commands
+          .map((value) => {
+            if (!value || typeof value !== "object") return null;
+            const candidate = value as Record<string, unknown>;
+            const command =
+              typeof candidate.command === "string"
+                ? candidate.command.trim()
+                : "";
+            const rawStatus =
+              typeof candidate.status === "string"
+                ? candidate.status.toLowerCase()
+                : "unknown";
+            const status: CommandValidation["status"] =
+              rawStatus === "pass" || rawStatus === "fail"
+                ? rawStatus
+                : "unknown";
+            if (!command) return null;
+            return { command, status };
+          })
+          .filter((value): value is CommandValidation => !!value)
+      : [],
+    open_questions: Array.isArray(parsed.open_questions)
+      ? parsed.open_questions
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : [],
+    confidence:
+      typeof parsed.confidence === "number" &&
+      Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : null,
+  };
+}
+
+function extractFinalReportJsonBlock(text: string): string | null {
+  const fenced = text.match(
     new RegExp("```" + FINAL_REPORT_FENCE + "\\s*([\\s\\S]*?)```", "i"),
   );
-  const rawJson = blockMatch?.[1]?.trim();
-  if (!rawJson) return null;
+  if (fenced?.[1]?.trim()) return fenced[1].trim();
 
-  try {
-    const parsed = JSON.parse(rawJson) as Partial<FinalReport>;
-    return {
-      summary: typeof parsed.summary === "string" ? parsed.summary.trim() : "",
-      changed_files: Array.isArray(parsed.changed_files)
-        ? parsed.changed_files
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim())
-            .filter(Boolean)
-        : [],
-      commands: Array.isArray(parsed.commands)
-        ? parsed.commands
-            .map((value) => {
-              if (!value || typeof value !== "object") return null;
-              const candidate = value as Record<string, unknown>;
-              const command =
-                typeof candidate.command === "string"
-                  ? candidate.command.trim()
-                  : "";
-              const rawStatus =
-                typeof candidate.status === "string"
-                  ? candidate.status.toLowerCase()
-                  : "unknown";
-              const status: CommandValidation["status"] =
-                rawStatus === "pass" || rawStatus === "fail"
-                  ? rawStatus
-                  : "unknown";
-              if (!command) return null;
-              return { command, status };
-            })
-            .filter((value): value is CommandValidation => !!value)
-        : [],
-      open_questions: Array.isArray(parsed.open_questions)
-        ? parsed.open_questions
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim())
-            .filter(Boolean)
-        : [],
-      confidence:
-        typeof parsed.confidence === "number" &&
-        Number.isFinite(parsed.confidence)
-          ? Math.max(0, Math.min(1, parsed.confidence))
-          : null,
-    };
-  } catch {
+  const marker = FINAL_REPORT_FENCE;
+  const markerIndex = text.toLowerCase().lastIndexOf(marker.toLowerCase());
+  if (markerIndex === -1) return null;
+
+  const afterMarker = text.slice(markerIndex);
+  const openBraceIndex = afterMarker.indexOf("{");
+  const closeBraceIndex = afterMarker.lastIndexOf("}");
+  if (
+    openBraceIndex === -1 ||
+    closeBraceIndex === -1 ||
+    closeBraceIndex <= openBraceIndex
+  ) {
     return null;
   }
+
+  return afterMarker.slice(openBraceIndex, closeBraceIndex + 1).trim();
+}
+
+function parseFinalReport(agent: SubAgent): FinalReport | null {
+  const assistantText = extractAssistantText(agent);
+  const candidateTexts = [
+    assistantText,
+    buildReportEntries(agent).join("\n"),
+  ].filter((value) => value.trim().length > 0);
+
+  for (const text of candidateTexts) {
+    const rawJson = extractFinalReportJsonBlock(text);
+    if (!rawJson) continue;
+
+    try {
+      const parsed = JSON.parse(rawJson) as Partial<FinalReport>;
+      return normalizeParsedFinalReport(parsed);
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
 }
 
 function scoreReportQuality(
