@@ -88,8 +88,7 @@ type ConfidenceRating = {
 const FINAL_REPORT_FENCE = "subagent_final_report";
 const STALE_RUNNING_MS = 60_000;
 const SUBAGENT_FINAL_REPORT_INSTRUCTIONS =
-  'When you finish, include a final machine-parseable block exactly once using this fenced JSON format:\n```subagent_final_report\n{"summary":"...","changed_files":["path/file"],"commands":[{"command":"npm test","status":"pass"}],"open_questions":["..."],"confidence":0.0}\n```\nKeep it terse. Use empty arrays when none. Finish immediately after this final block.';
-
+  'Do the requested task only; do not expand scope. If the task is too large, partially complete the highest-value slice, then report what remains and stop. When finished (or when blocked by scope), include a final machine-parseable block exactly once using this fenced JSON format:\n```subagent_final_report\n{"summary":"...","changed_files":["path/file"],"commands":[{"command":"npm test","status":"pass"}],"open_questions":["..."],"confidence":0.0}\n```\nKeep it terse. Use empty arrays when none. Stop immediately after this final block.';
 function readJsonFile(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
 
@@ -375,8 +374,7 @@ function scheduleSubAgentTimeout(agent: SubAgent): void {
 
     const timeoutText =
       `Time budget reached (${defaultTimeoutSeconds}s). ` +
-      "Please report what you have so far in a concise summary, then finish up now.";
-
+      "Do not continue expanding scope. Report what you completed, what remains, then finish now with the required final report block.";
     const result = notifySubAgent(agent.id, timeoutText);
     if (result.ok) {
       agent.timeoutNotified = true;
