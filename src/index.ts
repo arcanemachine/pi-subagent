@@ -88,7 +88,7 @@ type ConfidenceRating = {
 const FINAL_REPORT_FENCE = "subagent_final_report";
 const STALE_RUNNING_MS = 60_000;
 const SUBAGENT_FINAL_REPORT_INSTRUCTIONS =
-  'When you finish, include a final machine-parseable block exactly once using this fenced JSON format:\n```subagent_final_report\n{"summary":"...","changed_files":["path/file"],"commands":[{"command":"npm test","status":"pass"}],"open_questions":["..."],"confidence":0.0}\n```\nKeep it terse. Use empty arrays when none.';
+  'When you finish, include a final machine-parseable block exactly once using this fenced JSON format:\n```subagent_final_report\n{"summary":"...","changed_files":["path/file"],"commands":[{"command":"npm test","status":"pass"}],"open_questions":["..."],"confidence":0.0}\n```\nKeep it terse. Use empty arrays when none. Finish immediately after this final block.';
 
 function readJsonFile(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
@@ -1772,7 +1772,8 @@ export default function (pi: ExtensionAPI) {
     label: "Sub-Agent Status",
     description:
       "Get current sub-agent status. " +
-      "Returns structured state for one agent (`agent_id`) or all known agents when omitted.",
+      "Returns structured state for one agent (`agent_id`) or all known agents when omitted. " +
+      "Use sparingly (periodic checks), not continuous polling.",
     parameters: {
       type: "object",
       properties: {
@@ -2138,7 +2139,7 @@ export default function (pi: ExtensionAPI) {
             type: "text",
             text:
               `Spawned ${agents.length} sub-agents and returning immediately. ` +
-              "You will get automatic completion messages with final deliverables. Prefer hands-off execution; check status periodically and steer/kill only when needed.",
+              "You will get automatic completion messages with final deliverables. Prefer hands-off execution; avoid continuous polling. Check status periodically and steer/kill only when needed.",
           },
         ],
         details: {
