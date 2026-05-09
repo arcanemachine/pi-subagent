@@ -43,7 +43,6 @@ let configuredAgents: Record<string, SubagentProfile> = {};
 let maxActiveSubagents: number | undefined = undefined;
 let defaultTimeoutSeconds: number | undefined = undefined;
 let allowNestedSubagents = false;
-let startupAgentGuideSent = false;
 let sendCompletionMessage:
   | ((content: string, details?: Record<string, unknown>) => void)
   | null = null;
@@ -2214,7 +2213,6 @@ export default function (pi: ExtensionAPI) {
       agent.process.kill();
     }
     activeAgents.clear();
-    startupAgentGuideSent = false;
   });
 
   // Set up status on session start
@@ -2222,18 +2220,6 @@ export default function (pi: ExtensionAPI) {
     currentCtx = ctx;
     refreshConfiguredAgents(ctx.cwd);
     updateSubAgentStatus();
-
-    if (!startupAgentGuideSent) {
-      const configuredAgentsText = getConfiguredAgentsText(ctx);
-      pi.sendMessage({
-        customType: "subagent-agents",
-        content:
-          "Sub-agent types loaded from settings. Use `subagent_spawn` with required `agent` (or `/subagent spawn:<agent> ...`). Completion messages are automatic.\n\n" +
-          configuredAgentsText,
-        display: false,
-      });
-      startupAgentGuideSent = true;
-    }
   });
 
   // Clear subagents when a new session is created (/new command)
@@ -2251,7 +2237,6 @@ export default function (pi: ExtensionAPI) {
       watchedAgentIds.clear();
       watchAllMode = false;
       updateWatchWidget();
-      startupAgentGuideSent = false;
     }
   });
 }
