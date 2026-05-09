@@ -60,7 +60,6 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 ### Tools
 
 - `subagent_spawn` - Spawn a single sub-agent and return immediately (required `agent`)
-- `subagent_report` - Get recent activity entries (`count` optional, default: 3)
 - `subagent_status` - Get structured current status (`agent_id` optional)
 - `subagent_notify` - Send follow-up guidance to a running sub-agent
 - `subagent_kill` - Kill a specific sub-agent by ID
@@ -69,7 +68,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 
 `count` is clamped to a safe maximum (50).
 
-Sub-agents are prompted to emit a machine-parseable final JSON block (`subagent_final_report`) containing summary, changed files, commands, open questions, and confidence. `subagent_report` surfaces this first, then compact recent activity, checklist, and quality score.
+Sub-agents are prompted to emit a machine-parseable final JSON block (`subagent_final_report`) containing summary, changed files, commands, open questions, and confidence. Completion messages include compact final deliverable details; `/subagent report` remains available for manual inspection.
 
 #### Agent resolution behavior
 

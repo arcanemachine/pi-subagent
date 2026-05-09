@@ -397,10 +397,13 @@ function notifyAgentCompletion(agent: SubAgent) {
   const statusText = agent.status === "completed" ? "completed" : "errored";
   const exitText =
     agent.exitCode !== undefined ? ` | exit=${agent.exitCode}` : "";
+  const reportData = getAgentReportData(agent.id, DEFAULT_REPORT_COUNT);
 
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
-      ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}`,
+      ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}` +
+      `\nquality: ${reportData.reportQuality.score}/${reportData.reportQuality.maxScore}` +
+      `\nsummary: ${reportData.finalReport?.summary || "(missing structured final report block)"}`,
     {
       agentId: agent.id,
       status: agent.status,
@@ -409,6 +412,9 @@ function notifyAgentCompletion(agent: SubAgent) {
       model: agent.model,
       durationSec,
       exitCode: agent.exitCode,
+      finalReport: reportData.finalReport,
+      reportQuality: reportData.reportQuality,
+      reviewChecklist: reportData.reviewChecklist,
     },
   );
   agent.completionNotified = true;
@@ -1687,7 +1693,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Spawn a sub-agent to work on a task in parallel. " +
       "`agent` is required and must match a configured key in settings `pi-subagent.agents`. " +
-      "Returns immediately. Completion messages are automatic; use subagent_report/subagent_status for deeper inspection.",
+      "Returns immediately. Completion messages include final deliverables. You can check subagent_status periodically, but prefer a hands-off approach: let it run, then steer or kill only if needed.",
     parameters: {
       type: "object",
       properties: {
@@ -1743,10 +1749,10 @@ export default function (pi: ExtensionAPI) {
               `Task: ${agent.task}\n` +
               `Agent type: ${agent.agentType || "(unknown)"}\n` +
               `Model: ${agent.model || "(unknown)"}\n\n` +
-              `The sub-agent is now running in parallel. You can:\n` +
-              `- Watch its progress in the widget above\n` +
-              `- Run \`/subagent report ${agent.id}\` to see full details\n` +
-              `- Spawn more sub-agents for parallel work`,
+              `The sub-agent is now running in parallel. Recommended workflow:\n` +
+              `- Let it run hands-off\n` +
+              `- Use status/redirect/kill only if needed\n` +
+              `- Review the completion deliverable when it finishes`,
           },
         ],
         details: {
@@ -1755,64 +1761,6 @@ export default function (pi: ExtensionAPI) {
           taskTitle: agent.taskTitle,
           agentType: agent.agentType,
           model: agent.model,
-        },
-      };
-    },
-  });
-
-  // Tool: Get recent activity entries for a sub-agent
-  pi.registerTool({
-    name: "subagent_report",
-    label: "Sub-Agent Report",
-    description:
-      "Get a sub-agent report. " +
-      "Returns recent sub-agent activity entries. " +
-      "Use `count` to choose how many entries to include (default: 3).",
-    parameters: {
-      type: "object",
-      properties: {
-        agent_id: {
-          type: "string",
-          description: "The sub-agent ID to get the report for",
-        },
-        count: {
-          type: "number",
-          description:
-            "How many recent activity entries to include. Defaults to 3.",
-          default: DEFAULT_REPORT_COUNT,
-        },
-      },
-      required: ["agent_id"],
-    } as any,
-    async execute(
-      toolCallId,
-      params: { agent_id: string; count?: number },
-      signal,
-      onUpdate,
-      ctx,
-    ) {
-      const normalizedCount = normalizeReportCount(params.count);
-      const reportData = getAgentReportData(params.agent_id, normalizedCount);
-      const reportText = getAgentReport(params.agent_id, normalizedCount);
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: reportText,
-          },
-        ],
-        details: {
-          agentId: params.agent_id,
-          found: reportData.found,
-          done: reportData.done,
-          status: reportData.status,
-          diagnostics: reportData.diagnostics,
-          count: reportData.count,
-          recentEntries: reportData.recentEntries,
-          finalReport: reportData.finalReport,
-          reportQuality: reportData.reportQuality,
-          reviewChecklist: reportData.reviewChecklist,
         },
       };
     },
@@ -2100,7 +2048,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Spawn multiple sub-agents to work on different tasks in parallel. " +
       "Each task must include an `agent` key that matches a configured type in `pi-subagent.agents`. " +
-      "Returns immediately after spawning and sends automatic completion messages. Use subagent_report/subagent_status for deeper inspection.",
+      "Returns immediately after spawning and sends automatic completion messages with final deliverables. You can check subagent_status periodically, but prefer a hands-off approach: let agents run, then steer or kill only if needed.",
     parameters: {
       type: "object",
       properties: {
@@ -2190,7 +2138,7 @@ export default function (pi: ExtensionAPI) {
             type: "text",
             text:
               `Spawned ${agents.length} sub-agents and returning immediately. ` +
-              "You will get automatic completion messages; use subagent_report/subagent_status for details.",
+              "You will get automatic completion messages with final deliverables. Prefer hands-off execution; check status periodically and steer/kill only when needed.",
           },
         ],
         details: {
