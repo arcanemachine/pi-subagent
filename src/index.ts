@@ -1420,7 +1420,8 @@ export default function (pi: ExtensionAPI) {
       const baseItems = [
         {
           value: "status",
-          label: "status [id] — Show current structured status (do NOT use for routine polling)",
+          label:
+            "status [id] — Show current structured status (do NOT use for routine polling)",
         },
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
         { value: "killall", label: "killall — Kill all sub-agents" },

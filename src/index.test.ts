@@ -86,7 +86,9 @@ test("manual timeout override is applied", () => {
 
   assert.equal(agent.timeoutSeconds, 70);
   assert.ok(agent.timeoutAt);
-  assert.ok(Math.abs((agent.timeoutAt || 0) - (agent.startTime + 70000)) < 1000);
+  assert.ok(
+    Math.abs((agent.timeoutAt || 0) - (agent.startTime + 70000)) < 1000,
+  );
 });
 
 test("sends wrap-up warning to subagent 60 seconds before timeout", async () => {
