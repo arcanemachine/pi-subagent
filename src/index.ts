@@ -454,6 +454,13 @@ function scheduleSubAgentTimeout(
   }, timeoutSeconds * 1000);
 }
 
+function removeAgentFromTracking(id: string): void {
+  activeAgents.delete(id);
+  watchedAgentIds.delete(id);
+  updateSubAgentStatus();
+  updateWatchWidget();
+}
+
 function notifyAgentCompletion(agent: SubAgent) {
   if (agent.completionNotified) return;
   if (agent.status !== "completed" && agent.status !== "error") return;
@@ -489,6 +496,7 @@ function notifyAgentCompletion(agent: SubAgent) {
     },
   );
   agent.completionNotified = true;
+  removeAgentFromTracking(agent.id);
 }
 
 function spawnSubAgent(
@@ -1316,10 +1324,7 @@ function killSubAgent(id: string): {
 
   clearSubAgentTimeout(agent);
   agent.process.kill();
-  activeAgents.delete(id);
-  watchedAgentIds.delete(id);
-  updateSubAgentStatus();
-  updateWatchWidget();
+  removeAgentFromTracking(id);
   return { ok: true };
 }
 
@@ -1414,25 +1419,13 @@ export default function (pi: ExtensionAPI) {
 
       const baseItems = [
         {
-          value: "report",
-          label: "report <id> [count] — Get recent sub-agent activity",
-        },
-        {
           value: "status",
           label: "status [id] — Show current structured status (do NOT use for routine polling)",
         },
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
         { value: "killall", label: "killall — Kill all sub-agents" },
-        {
-          value: "prune",
-          label: "prune — Remove completed sub-agents from list",
-        },
         { value: "show", label: "show [id] — Watch sub-agent (no ID = all)" },
         { value: "hide", label: "hide [id] — Stop watching (no ID = all)" },
-        {
-          value: "append",
-          label: "append <id> [count] — Add report to context",
-        },
         {
           value: "notify",
           label: "notify <id> <text> — Send guidance to a running sub-agent",
@@ -1469,7 +1462,7 @@ export default function (pi: ExtensionAPI) {
       const trimmedArgs = args.trim();
       if (!trimmedArgs) {
         ctx.ui.notify(
-          "Usage: /subagent spawn:<agent>|report|status|append|notify|redirect|kill|killall|prune|show|hide",
+          "Usage: /subagent spawn:<agent>|status|notify|redirect|kill|killall|show|hide",
           "error",
         );
         return;
@@ -1546,28 +1539,6 @@ export default function (pi: ExtensionAPI) {
       }
 
       switch (subcommand) {
-        case "report": {
-          const reportId = rest[0];
-          const { count, error } = parseReportCountFromArg(rest[1]);
-
-          if (!reportId) {
-            ctx.ui.notify("Usage: /subagent report <id> [count]", "error");
-            return;
-          }
-          if (error) {
-            ctx.ui.notify(
-              `${error}. Using default count ${DEFAULT_REPORT_COUNT}.`,
-              "warning",
-            );
-          }
-
-          const report = getAgentReport(reportId, count);
-          // Just display to user, don't add to context
-          const separator = "─".repeat(40);
-          ctx.ui.notify(`${separator}\n${report}\n${separator}`, "info");
-          break;
-        }
-
         case "status": {
           const statusId = rest[0];
 
@@ -1602,35 +1573,6 @@ export default function (pi: ExtensionAPI) {
           };
           ctx.ui.notify(JSON.stringify(status, null, 2), "info");
           return;
-        }
-
-        case "append": {
-          const reportId = rest[0];
-          const { count, error } = parseReportCountFromArg(rest[1]);
-
-          if (!reportId) {
-            ctx.ui.notify("Usage: /subagent append <id> [count]", "error");
-            return;
-          }
-          if (error) {
-            ctx.ui.notify(
-              `${error}. Using default count ${DEFAULT_REPORT_COUNT}.`,
-              "warning",
-            );
-          }
-
-          const reportToAppend = getAgentReport(reportId, count);
-          // Send to conversation so LLM can see it
-          pi.sendMessage({
-            customType: "subagent-report",
-            content: reportToAppend,
-            display: true,
-          });
-          ctx.ui.notify(
-            `Report for ${reportId} (last ${count}) added to conversation`,
-            "info",
-          );
-          break;
         }
 
         case "notify": {
@@ -1708,7 +1650,7 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify(`Killed sub-agent ${subArgs}`, "info");
           } else if (result.reason === "already_finished") {
             ctx.ui.notify(
-              `Sub-agent ${subArgs} already finished. Use /subagent prune to remove it.`,
+              `Sub-agent ${subArgs} already finished and has already been removed from active status.`,
               "warning",
             );
           } else {
@@ -1722,20 +1664,6 @@ export default function (pi: ExtensionAPI) {
           }
           ctx.ui.notify("Killed all sub-agents", "info");
           break;
-
-        case "prune": {
-          let pruned = 0;
-          for (const [id, agent] of activeAgents) {
-            if (agent.status === "completed" || agent.status === "error") {
-              activeAgents.delete(id);
-              pruned++;
-            }
-          }
-          updateSubAgentStatus();
-          updateWatchWidget(); // Clean up pruned agents from widget
-          ctx.ui.notify(`Pruned ${pruned} completed sub-agents`, "info");
-          break;
-        }
 
         case "show":
           if (!subArgs) {
@@ -1778,7 +1706,7 @@ export default function (pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task> | report|status|append|notify|redirect|kill|killall|prune|show|hide",
+            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task> | status|notify|redirect|kill|killall|show|hide",
             "error",
           );
       }

@@ -46,14 +46,11 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 ### Commands
 
 - `/subagent spawn:<agent> <task>` - Spawn a new sub-agent using configured agent type
-- `/subagent report <id> [count]` - View recent activity entries (default: last 3)
-- `/subagent status [id]` - View structured live status for one/all sub-agents
-- `/subagent append <id> [count]` - Add recent activity report to conversation context
+- `/subagent status [id]` - View structured live status for one/all active sub-agents
 - `/subagent notify <id> <text>` - Send follow-up guidance to a running sub-agent
 - `/subagent redirect <id> <focus>` - Refocus a running sub-agent with explicit ACK template
 - `/subagent kill <id>` - Kill a specific sub-agent
 - `/subagent killall` - Kill all sub-agents
-- `/subagent prune` - Remove completed sub-agents
 - `/subagent show [id]` - Watch sub-agent(s) in widget (no ID = all)
 - `/subagent hide [id]` - Stop watching sub-agent(s) (no ID = all)
 
@@ -66,9 +63,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `subagent_list_types` - List configured agent types (name/model/when_to_use)
 - `subagent_spawn_parallel` - Spawn multiple sub-agents, return immediately, and receive completion messages (required per-task `agent`)
 
-`count` is clamped to a safe maximum (50).
-
-Sub-agents are prompted to emit a machine-parseable final JSON block (`subagent_final_report`) containing summary, changed files, commands, open questions, and confidence. Completion messages include compact final deliverable details; `/subagent report` remains available for manual inspection.
+Sub-agents are prompted to emit a machine-parseable final JSON block (`subagent_final_report`) containing summary, changed files, commands, open questions, and confidence. Completion messages include compact final deliverable details, and completed sub-agents are automatically removed from active tracking.
 
 #### Agent resolution behavior
 

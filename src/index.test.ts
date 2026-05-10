@@ -117,6 +117,20 @@ test("sends wrap-up warning to subagent 60 seconds before timeout", async () => 
   assert.ok(warning, "expected wrap-up warning notification to subagent");
 });
 
+test("completed agents are automatically pruned from tracking", () => {
+  __test.resetState();
+
+  const agent = __test.addMockAgent("T-prune", {
+    status: "completed",
+    endTime: Date.now(),
+  });
+
+  __test.notifyAgentCompletion(agent);
+
+  const report = __test.getAgentReportData("T-prune");
+  assert.equal(report.found, false);
+});
+
 test("completion details include timedOut true after timeout", async () => {
   __test.resetState();
   __test.setDefaultTimeoutSeconds(1);
