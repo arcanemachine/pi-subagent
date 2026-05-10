@@ -1419,7 +1419,7 @@ export default function (pi: ExtensionAPI) {
         },
         {
           value: "status",
-          label: "status [id] — Show current structured status",
+          label: "status [id] — Show current structured status (do NOT use for routine polling)",
         },
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
         { value: "killall", label: "killall — Kill all sub-agents" },
@@ -1792,7 +1792,8 @@ export default function (pi: ExtensionAPI) {
     description:
       "Spawn a sub-agent to work on a task in parallel. " +
       "`agent` is required and must match a configured key in settings `pi-subagent.agents`. " +
-      "Returns immediately. Completion messages include final deliverables. You can check subagent_status periodically, but prefer a hands-off approach: let it run, then steer or kill only if needed.",
+      "Returns immediately. An automatic completion message will be sent when the sub-agent finishes. " +
+      "Do NOT call subagent_status for routine polling. Wait for the completion message; only check status if the user asks or you suspect a stall.",
     parameters: {
       type: "object",
       properties: {
@@ -1875,10 +1876,8 @@ export default function (pi: ExtensionAPI) {
               `Agent type: ${agent.agentType || "(unknown)"}\n` +
               `Model: ${agent.model || "(unknown)"}\n` +
               `Timeout: ${agent.timeoutSeconds ? `${agent.timeoutSeconds}s` : "(none)"}\n\n` +
-              `The sub-agent is now running in parallel. Recommended workflow:\n` +
-              `- Let it run hands-off\n` +
-              `- Use status/redirect/kill only if needed\n` +
-              `- Review the completion deliverable when it finishes`,
+              `The sub-agent is now running in parallel. Do NOT poll subagent_status. ` +
+              `Wait for the automatic completion message. Only check status or intervene if the user asks or you suspect a stall.`,
           },
         ],
         details: {
@@ -1900,7 +1899,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Get current sub-agent status. " +
       "Returns structured state for one agent (`agent_id`) or all known agents when omitted. " +
-      "Use sparingly (periodic checks), not continuous polling.",
+      "Do NOT use for routine polling. Only call if the user explicitly asks for an update or you suspect a sub-agent is stuck. Wait for automatic completion messages instead.",
     parameters: {
       type: "object",
       properties: {
@@ -2176,7 +2175,8 @@ export default function (pi: ExtensionAPI) {
     description:
       "Spawn multiple sub-agents to work on different tasks in parallel. " +
       "Each task must include an `agent` key that matches a configured type in `pi-subagent.agents`. " +
-      "Returns immediately after spawning and sends automatic completion messages with final deliverables. You can check subagent_status periodically, but prefer a hands-off approach: let agents run, then steer or kill only if needed.",
+      "Returns immediately after spawning; automatic completion messages will be sent as each sub-agent finishes. " +
+      "Do NOT call subagent_status for routine polling. Wait for the completion messages; only check status if the user asks or you suspect a stall.",
     parameters: {
       type: "object",
       properties: {
@@ -2297,7 +2297,7 @@ export default function (pi: ExtensionAPI) {
             type: "text",
             text:
               `Spawned ${agents.length} sub-agents and returning immediately. ` +
-              "You will get automatic completion messages with final deliverables. Prefer hands-off execution; avoid continuous polling. Check status periodically and steer/kill only when needed.",
+              "Automatic completion messages will arrive as each sub-agent finishes. Do NOT poll subagent_status. Wait for those messages; only check status if the user asks or you suspect a stall.",
           },
         ],
         details: {
