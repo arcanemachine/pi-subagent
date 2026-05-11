@@ -54,7 +54,10 @@ const MAX_REPORT_COUNT = 50;
 const MAX_ACTIVE_SUBAGENTS_CAP = 100;
 const MAX_DEFAULT_TIMEOUT_SECONDS = 86400;
 const TIMEOUT_WRAP_UP_WARNING_SECONDS = 60;
+const WATCH_WIDGET_UPDATE_INTERVAL_MS = 250;
 let timeoutEscalationDelayMs = 30000;
+let watchWidgetUpdateHandle: NodeJS.Timeout | undefined;
+let lastWatchWidgetUpdateAt = 0;
 
 type SubagentProfile = {
   model: string;
@@ -605,7 +608,7 @@ function spawnSubAgent(
 
     // Update watch widget if this agent is being watched
     if (watchedAgentIds.has(id)) {
-      updateWatchWidget();
+      scheduleWatchWidgetUpdate();
     }
   });
 
@@ -1114,6 +1117,29 @@ function buildReviewChecklist(finalReport: FinalReport | null): string[] {
     `[ ] Check risks/open questions (${finalReport.open_questions.length})`,
     "[ ] Confirm tests/doc updates if expected",
   ];
+}
+
+function scheduleWatchWidgetUpdate(force = false) {
+  if (force) {
+    if (watchWidgetUpdateHandle) {
+      clearTimeout(watchWidgetUpdateHandle);
+      watchWidgetUpdateHandle = undefined;
+    }
+    lastWatchWidgetUpdateAt = Date.now();
+    updateWatchWidget();
+    return;
+  }
+
+  if (watchWidgetUpdateHandle) return;
+
+  const elapsed = Date.now() - lastWatchWidgetUpdateAt;
+  const delay = Math.max(0, WATCH_WIDGET_UPDATE_INTERVAL_MS - elapsed);
+
+  watchWidgetUpdateHandle = setTimeout(() => {
+    watchWidgetUpdateHandle = undefined;
+    lastWatchWidgetUpdateAt = Date.now();
+    updateWatchWidget();
+  }, delay);
 }
 
 function updateWatchWidget() {
@@ -2288,6 +2314,11 @@ export const __test = {
     nextAgentId = 1;
     defaultTimeoutSeconds = 180;
     sendCompletionMessage = null;
+    if (watchWidgetUpdateHandle) {
+      clearTimeout(watchWidgetUpdateHandle);
+      watchWidgetUpdateHandle = undefined;
+    }
+    lastWatchWidgetUpdateAt = 0;
   },
 
   parseFinalReportFromTexts,
