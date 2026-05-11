@@ -171,3 +171,38 @@ test("completion details include timedOut true after timeout", async () => {
   assert.equal(completion?.details?.timedOut, true);
   assert.equal(completion?.details?.timeoutSeconds, 1);
 });
+
+test("completion message includes full assistant report text", () => {
+  __test.resetState();
+
+  const sent: Array<{ content: string; details?: Record<string, unknown> }> =
+    [];
+  __test.setCompletionSender((content, details) =>
+    sent.push({ content, details }),
+  );
+
+  const fullText =
+    "Recipe name: Test Cookies\nSource URL: https://example.com/cookies";
+  const agent = __test.addMockAgent("T-full-text", {
+    status: "completed",
+    endTime: Date.now(),
+    output: [
+      JSON.stringify({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: fullText,
+        },
+      }),
+    ],
+  });
+
+  __test.notifyAgentCompletion(agent);
+
+  const completion = sent[0];
+  assert.ok(completion, "expected completion message");
+  assert.ok(completion.content.includes("full_report:"));
+  assert.ok(completion.content.includes("```text"));
+  assert.ok(completion.content.includes(fullText));
+  assert.equal(completion.details?.finalReportText, fullText);
+});

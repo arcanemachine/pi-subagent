@@ -477,12 +477,15 @@ function notifyAgentCompletion(agent: SubAgent) {
   const exitText =
     agent.exitCode !== undefined ? ` | exit=${agent.exitCode}` : "";
   const reportData = getAgentReportData(agent.id, DEFAULT_REPORT_COUNT);
+  const assistantText = extractAssistantText(agent).trim();
+  const fullReportText = assistantText || "(no assistant final text captured)";
 
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
       ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}` +
       `\nconfidence rating: ${reportData.confidenceRating.score}/${reportData.confidenceRating.maxScore}` +
-      `\nsummary: ${reportData.finalReport?.summary || "(missing structured final report block)"}`,
+      `\nsummary: ${reportData.finalReport?.summary || "(missing structured final report block)"}` +
+      `\nfull_report:\n\`\`\`text\n${fullReportText}\n\`\`\``,
     {
       agentId: agent.id,
       status: agent.status,
@@ -493,6 +496,7 @@ function notifyAgentCompletion(agent: SubAgent) {
       exitCode: agent.exitCode,
       timedOut: !!agent.timeoutNotified,
       timeoutSeconds: agent.timeoutSeconds,
+      finalReportText: fullReportText,
       finalReport: reportData.finalReport,
       confidenceRating: reportData.confidenceRating,
       reviewChecklist: reportData.reviewChecklist,
