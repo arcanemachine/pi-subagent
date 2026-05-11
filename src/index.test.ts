@@ -206,3 +206,40 @@ test("completion message includes full assistant report text", () => {
   assert.ok(completion.content.includes(fullText));
   assert.equal(completion.details?.finalReportText, fullText);
 });
+
+test("completion strips wrapper text and trailing structured final report", () => {
+  __test.resetState();
+
+  const sent: Array<{ content: string; details?: Record<string, unknown> }> =
+    [];
+  __test.setCompletionSender((content, details) =>
+    sent.push({ content, details }),
+  );
+
+  const expected =
+    "Recipe name: Test Cookies\nSource URL: https://example.com/cookies";
+  const noisyText = `Here's the report:\n\n${expected}\n\n\`\`\`subagent_final_report\n{"summary":"ok","changed_files":[],"commands":[],"open_questions":[],"confidence":1}\n\`\`\``;
+
+  const agent = __test.addMockAgent("T-sanitize", {
+    status: "completed",
+    endTime: Date.now(),
+    output: [
+      JSON.stringify({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: noisyText,
+        },
+      }),
+    ],
+  });
+
+  __test.notifyAgentCompletion(agent);
+
+  const completion = sent[0];
+  assert.ok(completion, "expected completion message");
+  assert.ok(completion.content.includes(expected));
+  assert.ok(!completion.content.includes("Here's the report:"));
+  assert.ok(!completion.content.includes("```subagent_final_report"));
+  assert.equal(completion.details?.finalReportText, expected);
+});

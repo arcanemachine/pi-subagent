@@ -478,7 +478,9 @@ function notifyAgentCompletion(agent: SubAgent) {
     agent.exitCode !== undefined ? ` | exit=${agent.exitCode}` : "";
   const reportData = getAgentReportData(agent.id, DEFAULT_REPORT_COUNT);
   const assistantText = extractAssistantText(agent).trim();
-  const fullReportText = assistantText || "(no assistant final text captured)";
+  const sanitizedReportText = sanitizeAssistantReportText(assistantText);
+  const fullReportText =
+    sanitizedReportText || assistantText || "(no assistant final text captured)";
 
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
@@ -981,6 +983,27 @@ function extractAssistantText(agent: SubAgent): string {
   }
 
   return text;
+}
+
+function sanitizeAssistantReportText(text: string): string {
+  let cleaned = text.trim();
+
+  const finalReportFenceRegex = new RegExp(
+    "\\n?```" + FINAL_REPORT_FENCE + "[\\s\\S]*?```\\s*$",
+    "i",
+  );
+  cleaned = cleaned.replace(finalReportFenceRegex, "").trim();
+
+  const recipeStartIndex = cleaned.search(/^Recipe name:/im);
+  if (recipeStartIndex > 0) {
+    cleaned = cleaned.slice(recipeStartIndex).trim();
+  }
+
+  cleaned = cleaned
+    .replace(/^here(?:'s| is) the report:\s*/i, "")
+    .trim();
+
+  return cleaned;
 }
 
 function normalizeParsedFinalReport(parsed: Partial<FinalReport>): FinalReport {
