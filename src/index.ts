@@ -445,7 +445,7 @@ function scheduleSubAgentTimeout(
         );
 
         sendCompletionMessage?.(
-          `⚠️ Sub-agent ${agent.id} is still running after timeout finalize request. Consider checking status and using subagent_kill if needed.`,
+          `⚠️ Sub-agent ${agent.id} is still running after timeout finalize request. Consider checking status and using an aggressive steering message to instruct the agent to finish immediately. If the agent fails to respond, you may want to use subagent_kill to forcefully end it.`,
           {
             agentId: agent.id,
             timeoutSeconds: timeoutSeconds,
@@ -484,10 +484,10 @@ function notifyAgentCompletion(agent: SubAgent) {
 
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
-      ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}` +
-      `\nconfidence rating: ${reportData.confidenceRating.score}/${reportData.confidenceRating.maxScore}` +
-      `\nsummary: ${reportData.finalReport?.summary || "(missing structured final report block)"}` +
-      `\nfull_report:\n\`\`\`text\n${fullReportText}\n\`\`\``,
+    ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}` +
+    `\nconfidence rating: ${reportData.confidenceRating.score}/${reportData.confidenceRating.maxScore}` +
+    `\nsummary: ${reportData.finalReport?.summary || "(missing structured final report block)"}` +
+    `\nfull_report:\n\`\`\`text\n${fullReportText}\n\`\`\``,
     {
       agentId: agent.id,
       status: agent.status,
@@ -861,7 +861,7 @@ function buildTranscriptLines(
           }
         }
       }
-    } catch {}
+    } catch { }
   }
 
   // Don't include incomplete message - it will be added on next update
@@ -948,7 +948,7 @@ function buildReportEntries(agent: SubAgent): string[] {
           }
         }
       }
-    } catch {}
+    } catch { }
   }
 
   if (currentMessage.trim()) {
@@ -979,7 +979,7 @@ function extractAssistantText(agent: SubAgent): string {
       ) {
         text += event.assistantMessageEvent.delta || "";
       }
-    } catch {}
+    } catch { }
   }
 
   return text;
@@ -1011,41 +1011,41 @@ function normalizeParsedFinalReport(parsed: Partial<FinalReport>): FinalReport {
     summary: typeof parsed.summary === "string" ? parsed.summary.trim() : "",
     changed_files: Array.isArray(parsed.changed_files)
       ? parsed.changed_files
-          .filter((value): value is string => typeof value === "string")
-          .map((value) => value.trim())
-          .filter(Boolean)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean)
       : [],
     commands: Array.isArray(parsed.commands)
       ? parsed.commands
-          .map((value) => {
-            if (!value || typeof value !== "object") return null;
-            const candidate = value as Record<string, unknown>;
-            const command =
-              typeof candidate.command === "string"
-                ? candidate.command.trim()
-                : "";
-            const rawStatus =
-              typeof candidate.status === "string"
-                ? candidate.status.toLowerCase()
-                : "unknown";
-            const status: CommandValidation["status"] =
-              rawStatus === "pass" || rawStatus === "fail"
-                ? rawStatus
-                : "unknown";
-            if (!command) return null;
-            return { command, status };
-          })
-          .filter((value): value is CommandValidation => !!value)
+        .map((value) => {
+          if (!value || typeof value !== "object") return null;
+          const candidate = value as Record<string, unknown>;
+          const command =
+            typeof candidate.command === "string"
+              ? candidate.command.trim()
+              : "";
+          const rawStatus =
+            typeof candidate.status === "string"
+              ? candidate.status.toLowerCase()
+              : "unknown";
+          const status: CommandValidation["status"] =
+            rawStatus === "pass" || rawStatus === "fail"
+              ? rawStatus
+              : "unknown";
+          if (!command) return null;
+          return { command, status };
+        })
+        .filter((value): value is CommandValidation => !!value)
       : [],
     open_questions: Array.isArray(parsed.open_questions)
       ? parsed.open_questions
-          .filter((value): value is string => typeof value === "string")
-          .map((value) => value.trim())
-          .filter(Boolean)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean)
       : [],
     confidence:
       typeof parsed.confidence === "number" &&
-      Number.isFinite(parsed.confidence)
+        Number.isFinite(parsed.confidence)
         ? Math.max(0, Math.min(1, parsed.confidence))
         : null,
   };
@@ -1235,7 +1235,7 @@ function updateWatchWidget() {
             : "idle";
       const progressInfo =
         agent.progressPercent !== undefined &&
-        (agent.status === "starting" || agent.status === "running")
+          (agent.status === "starting" || agent.status === "running")
           ? `~${agent.progressPercent}% | `
           : "";
       widgetLines.push(
@@ -1347,13 +1347,13 @@ function getAgentReport(id: string, requestedCount?: number): string {
 
   const finalBlock = report.finalReport
     ? [
-        "## Final deliverable",
-        `summary: ${report.finalReport.summary || "(empty)"}`,
-        `changed_files: ${report.finalReport.changed_files.join(", ") || "(none)"}`,
-        `commands: ${report.finalReport.commands.map((c) => `${c.command}=${c.status}`).join(", ") || "(none)"}`,
-        `open_questions: ${report.finalReport.open_questions.join(" | ") || "(none)"}`,
-        `confidence: ${report.finalReport.confidence ?? "(missing)"}`,
-      ].join("\n")
+      "## Final deliverable",
+      `summary: ${report.finalReport.summary || "(empty)"}`,
+      `changed_files: ${report.finalReport.changed_files.join(", ") || "(none)"}`,
+      `commands: ${report.finalReport.commands.map((c) => `${c.command}=${c.status}`).join(", ") || "(none)"}`,
+      `open_questions: ${report.finalReport.open_questions.join(" | ") || "(none)"}`,
+      `confidence: ${report.finalReport.confidence ?? "(missing)"}`,
+    ].join("\n")
     : "## Final deliverable\n(missing structured final report block)";
 
   const confidenceBlock = `confidence rating: ${report.confidenceRating.score}/${report.confidenceRating.maxScore}`;
@@ -1387,10 +1387,10 @@ function notifySubAgent(
 ): {
   ok: boolean;
   reason?:
-    | "not_found"
-    | "already_finished"
-    | "stdin_unavailable"
-    | "empty_message";
+  | "not_found"
+  | "already_finished"
+  | "stdin_unavailable"
+  | "empty_message";
 } {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -1437,7 +1437,7 @@ function notifySubAgent(
   return { ok: true };
 }
 
-export default function (pi: ExtensionAPI) {
+export default function(pi: ExtensionAPI) {
   sendCompletionMessage = (
     content: string,
     details?: Record<string, unknown>,
@@ -1454,9 +1454,9 @@ export default function (pi: ExtensionAPI) {
       },
       shouldTriggerTurn
         ? {
-            triggerTurn: true,
-            deliverAs: "followUp",
-          }
+          triggerTurn: true,
+          deliverAs: "followUp",
+        }
         : undefined,
     );
   };
@@ -2369,7 +2369,7 @@ export const __test = {
   },
 
   addMockAgent(id: string, overrides: Partial<SubAgent> = {}) {
-    const noop = () => {};
+    const noop = () => { };
     const mockProcess = {
       kill: noop,
       stdin: {
