@@ -332,13 +332,6 @@ function formatSubagentPrompt(task: string, extraContext?: string): string {
   return `${taskWithContext}\n\n${SUBAGENT_FINAL_REPORT_INSTRUCTIONS}`;
 }
 
-function buildRedirectMessage(text: string): string {
-  return (
-    `Redirect/focus request:\n${text.trim()}\n\n` +
-    "Acknowledge immediately with one line: REDIRECT_ACK: understood; new plan is <short plan>."
-  );
-}
-
 function transitionAgentStatus(
   agent: SubAgent,
   nextStatus: SubAgent["status"],
@@ -480,14 +473,16 @@ function notifyAgentCompletion(agent: SubAgent) {
   const assistantText = extractAssistantText(agent).trim();
   const sanitizedReportText = sanitizeAssistantReportText(assistantText);
   const fullReportText =
-    sanitizedReportText || assistantText || "(no assistant final text captured)";
+    sanitizedReportText ||
+    assistantText ||
+    "(no assistant final text captured)";
 
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
-    ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}` +
-    `\nconfidence rating: ${reportData.confidenceRating.score}/${reportData.confidenceRating.maxScore}` +
-    `\nsummary: ${reportData.finalReport?.summary || "(missing structured final report block)"}` +
-    `\nfull_report:\n\`\`\`text\n${fullReportText}\n\`\`\``,
+      ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}` +
+      `\nconfidence rating: ${reportData.confidenceRating.score}/${reportData.confidenceRating.maxScore}` +
+      `\nsummary: ${reportData.finalReport?.summary || "(missing structured final report block)"}` +
+      `\nfull_report:\n\`\`\`text\n${fullReportText}\n\`\`\``,
     {
       agentId: agent.id,
       status: agent.status,
@@ -861,7 +856,7 @@ function buildTranscriptLines(
           }
         }
       }
-    } catch { }
+    } catch {}
   }
 
   // Don't include incomplete message - it will be added on next update
@@ -948,7 +943,7 @@ function buildReportEntries(agent: SubAgent): string[] {
           }
         }
       }
-    } catch { }
+    } catch {}
   }
 
   if (currentMessage.trim()) {
@@ -979,7 +974,7 @@ function extractAssistantText(agent: SubAgent): string {
       ) {
         text += event.assistantMessageEvent.delta || "";
       }
-    } catch { }
+    } catch {}
   }
 
   return text;
@@ -999,9 +994,7 @@ function sanitizeAssistantReportText(text: string): string {
     cleaned = cleaned.slice(recipeStartIndex).trim();
   }
 
-  cleaned = cleaned
-    .replace(/^here(?:'s| is) the report:\s*/i, "")
-    .trim();
+  cleaned = cleaned.replace(/^here(?:'s| is) the report:\s*/i, "").trim();
 
   return cleaned;
 }
@@ -1011,41 +1004,41 @@ function normalizeParsedFinalReport(parsed: Partial<FinalReport>): FinalReport {
     summary: typeof parsed.summary === "string" ? parsed.summary.trim() : "",
     changed_files: Array.isArray(parsed.changed_files)
       ? parsed.changed_files
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean)
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter(Boolean)
       : [],
     commands: Array.isArray(parsed.commands)
       ? parsed.commands
-        .map((value) => {
-          if (!value || typeof value !== "object") return null;
-          const candidate = value as Record<string, unknown>;
-          const command =
-            typeof candidate.command === "string"
-              ? candidate.command.trim()
-              : "";
-          const rawStatus =
-            typeof candidate.status === "string"
-              ? candidate.status.toLowerCase()
-              : "unknown";
-          const status: CommandValidation["status"] =
-            rawStatus === "pass" || rawStatus === "fail"
-              ? rawStatus
-              : "unknown";
-          if (!command) return null;
-          return { command, status };
-        })
-        .filter((value): value is CommandValidation => !!value)
+          .map((value) => {
+            if (!value || typeof value !== "object") return null;
+            const candidate = value as Record<string, unknown>;
+            const command =
+              typeof candidate.command === "string"
+                ? candidate.command.trim()
+                : "";
+            const rawStatus =
+              typeof candidate.status === "string"
+                ? candidate.status.toLowerCase()
+                : "unknown";
+            const status: CommandValidation["status"] =
+              rawStatus === "pass" || rawStatus === "fail"
+                ? rawStatus
+                : "unknown";
+            if (!command) return null;
+            return { command, status };
+          })
+          .filter((value): value is CommandValidation => !!value)
       : [],
     open_questions: Array.isArray(parsed.open_questions)
       ? parsed.open_questions
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean)
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter(Boolean)
       : [],
     confidence:
       typeof parsed.confidence === "number" &&
-        Number.isFinite(parsed.confidence)
+      Number.isFinite(parsed.confidence)
         ? Math.max(0, Math.min(1, parsed.confidence))
         : null,
   };
@@ -1235,7 +1228,7 @@ function updateWatchWidget() {
             : "idle";
       const progressInfo =
         agent.progressPercent !== undefined &&
-          (agent.status === "starting" || agent.status === "running")
+        (agent.status === "starting" || agent.status === "running")
           ? `~${agent.progressPercent}% | `
           : "";
       widgetLines.push(
@@ -1347,13 +1340,13 @@ function getAgentReport(id: string, requestedCount?: number): string {
 
   const finalBlock = report.finalReport
     ? [
-      "## Final deliverable",
-      `summary: ${report.finalReport.summary || "(empty)"}`,
-      `changed_files: ${report.finalReport.changed_files.join(", ") || "(none)"}`,
-      `commands: ${report.finalReport.commands.map((c) => `${c.command}=${c.status}`).join(", ") || "(none)"}`,
-      `open_questions: ${report.finalReport.open_questions.join(" | ") || "(none)"}`,
-      `confidence: ${report.finalReport.confidence ?? "(missing)"}`,
-    ].join("\n")
+        "## Final deliverable",
+        `summary: ${report.finalReport.summary || "(empty)"}`,
+        `changed_files: ${report.finalReport.changed_files.join(", ") || "(none)"}`,
+        `commands: ${report.finalReport.commands.map((c) => `${c.command}=${c.status}`).join(", ") || "(none)"}`,
+        `open_questions: ${report.finalReport.open_questions.join(" | ") || "(none)"}`,
+        `confidence: ${report.finalReport.confidence ?? "(missing)"}`,
+      ].join("\n")
     : "## Final deliverable\n(missing structured final report block)";
 
   const confidenceBlock = `confidence rating: ${report.confidenceRating.score}/${report.confidenceRating.maxScore}`;
@@ -1387,10 +1380,10 @@ function notifySubAgent(
 ): {
   ok: boolean;
   reason?:
-  | "not_found"
-  | "already_finished"
-  | "stdin_unavailable"
-  | "empty_message";
+    | "not_found"
+    | "already_finished"
+    | "stdin_unavailable"
+    | "empty_message";
 } {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -1437,7 +1430,7 @@ function notifySubAgent(
   return { ok: true };
 }
 
-export default function(pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI) {
   sendCompletionMessage = (
     content: string,
     details?: Record<string, unknown>,
@@ -1454,9 +1447,9 @@ export default function(pi: ExtensionAPI) {
       },
       shouldTriggerTurn
         ? {
-          triggerTurn: true,
-          deliverAs: "followUp",
-        }
+            triggerTurn: true,
+            deliverAs: "followUp",
+          }
         : undefined,
     );
   };
@@ -1483,10 +1476,6 @@ export default function(pi: ExtensionAPI) {
         {
           value: "notify",
           label: "notify <id> <text> — Send guidance to a running sub-agent",
-        },
-        {
-          value: "redirect",
-          label: "redirect <id> <focus> — Refocus with explicit ack template",
         },
       ];
 
@@ -1516,7 +1505,7 @@ export default function(pi: ExtensionAPI) {
       const trimmedArgs = args.trim();
       if (!trimmedArgs) {
         ctx.ui.notify(
-          "Usage: /subagent spawn:<agent>|status|notify|redirect|kill|killall|show|hide",
+          "Usage: /subagent spawn:<agent>|status|notify|kill|killall|show|hide",
           "error",
         );
         return;
@@ -1672,28 +1661,6 @@ export default function(pi: ExtensionAPI) {
           return;
         }
 
-        case "redirect": {
-          const targetId = rest[0];
-          const focus = rest.slice(1).join(" ");
-
-          if (!targetId || !focus.trim()) {
-            ctx.ui.notify("Usage: /subagent redirect <id> <focus>", "error");
-            return;
-          }
-
-          const result = notifySubAgent(targetId, buildRedirectMessage(focus));
-          if (!result.ok) {
-            ctx.ui.notify(`Failed to redirect sub-agent ${targetId}`, "error");
-            return;
-          }
-
-          ctx.ui.notify(
-            `Redirect sent to sub-agent ${targetId}. Waiting for REDIRECT_ACK in report output.`,
-            "info",
-          );
-          return;
-        }
-
         case "kill":
           if (!subArgs) {
             ctx.ui.notify("Usage: /subagent kill <id>", "error");
@@ -1760,7 +1727,7 @@ export default function(pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task> | status|notify|redirect|kill|killall|show|hide",
+            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task> | status|notify|kill|killall|show|hide",
             "error",
           );
       }
@@ -2369,7 +2336,7 @@ export const __test = {
   },
 
   addMockAgent(id: string, overrides: Partial<SubAgent> = {}) {
-    const noop = () => { };
+    const noop = () => {};
     const mockProcess = {
       kill: noop,
       stdin: {

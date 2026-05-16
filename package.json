@@ -1,5 +1,5 @@
 {
-  "name": "pi-subagent",
+  "name": "@arcanemachine/pi-subagent",
   "version": "1.0.0",
   "description": "Pi extension for spawning sub-agents via RPC for parallel task execution",
   "type": "module",
