@@ -7,7 +7,6 @@ ALWAYS commit when a task is completed.
 ## Pre-commit
 
 ```bash
-npm install
 npm test
 npx tsc --noEmit
 npx prettier --write src/index.ts src/index.test.ts

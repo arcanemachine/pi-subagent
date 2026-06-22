@@ -1825,8 +1825,10 @@ export default function (pi: ExtensionAPI) {
               `Agent type: ${agent.agentType || "(unknown)"}\n` +
               `Model: ${agent.model || "(unknown)"}\n` +
               `Timeout: ${agent.timeoutSeconds ? `${agent.timeoutSeconds}s` : "(none)"}\n\n` +
-              `The sub-agent is now running in parallel. Do NOT poll subagent_status. ` +
-              `Wait for the automatic completion message. Only check status or intervene if the user asks or you suspect a stall.`,
+              `The sub-agent is now running in parallel. Its completion message will be delivered to you automatically as a new turn — you do not need to check on it. ` +
+              `Do NOT call subagent_status (or any tool) to poll for progress; that only wastes turns. ` +
+              `Continue with other work for the user, or end your turn. ` +
+              `Only call subagent_status if the user explicitly asks or you have reason to believe it is stuck.`,
           },
         ],
         details: {
@@ -1846,9 +1848,9 @@ export default function (pi: ExtensionAPI) {
     name: "subagent_status",
     label: "Sub-Agent Status",
     description:
-      "Get current sub-agent status. " +
-      "Returns structured state for one agent (`agent_id`) or all known agents when omitted. " +
-      "Do NOT use for routine polling. Only call if the user explicitly asks for an update or you suspect a sub-agent is stuck. Wait for automatic completion messages instead.",
+      "Get current sub-agent status for one agent (`agent_id`) or all when omitted. " +
+      "Only call when the user explicitly asks for an update or you suspect a sub-agent is stuck — it returns nothing the automatic completion message won't already deliver. " +
+      'Do NOT call it to "check in" while waiting; repeated idle calls waste turns. Wait for automatic completion messages instead.',
     parameters: {
       type: "object",
       properties: {
@@ -2246,7 +2248,9 @@ export default function (pi: ExtensionAPI) {
             type: "text",
             text:
               `Spawned ${agents.length} sub-agents and returning immediately. ` +
-              "Automatic completion messages will arrive as each sub-agent finishes. Do NOT poll subagent_status. Wait for those messages; only check status if the user asks or you suspect a stall.",
+              "A completion message will arrive automatically as each one finishes — you do not need to check. " +
+              "Do NOT call subagent_status (or any tool) to poll; that only wastes turns. " +
+              "Continue with other work or end your turn. Only check status if the user asks or you suspect a stall.",
           },
         ],
         details: {
