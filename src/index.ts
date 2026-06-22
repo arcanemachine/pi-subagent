@@ -282,35 +282,6 @@ function getConfiguredAgentEntries(
     .map(([name, profile]) => ({ name, profile }));
 }
 
-function getConfiguredAgentsText(
-  ctx: ExtensionContext | null | undefined,
-): string {
-  const entries = getConfiguredAgentEntries(ctx);
-
-  if (entries.length === 0) {
-    return "No sub-agent types configured. Add `pi-subagent.agents` entries to settings.";
-  }
-
-  const limitText = maxActiveSubagents
-    ? `Max active sub-agents: ${maxActiveSubagents}`
-    : "Max active sub-agents: (unlimited)";
-  const timeoutText = defaultTimeoutSeconds
-    ? `Default timeout: ${defaultTimeoutSeconds}s`
-    : "Default timeout: (none)";
-  const nestedText = allowNestedSubagents
-    ? "Nested sub-agents: enabled"
-    : "Nested sub-agents: disabled (default)";
-
-  const agentLines = entries
-    .map(({ name, profile }) => {
-      const whenToUse = profile.when_to_use || "(no when_to_use provided)";
-      return `- ${name}: model=${profile.model}; when_to_use=${whenToUse}`;
-    })
-    .join("\n");
-
-  return `${limitText}\n${timeoutText}\n${nestedText}\n\n${agentLines}`;
-}
-
 function getTaskTitle(task: string, maxLength = 80): string {
   const firstNonEmptyLine = task
     .split(/\r?\n/)

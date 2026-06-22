@@ -17,7 +17,7 @@ npx prettier --write src/index.ts src/index.test.ts
 Match existing commits:
 - `chore: add pi-package manifest and update README`
 - `style: add separators around report output`
-- `Fix TypeScript types and add dev dependency`
+- `fix: resolve TypeScript types and add dev dependency`
 
 ## Critical Implementation Notes
 
