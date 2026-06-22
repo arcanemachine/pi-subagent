@@ -119,8 +119,6 @@ Project settings override global settings by agent key. `max_active_subagents` i
 
 `allow_nested_subagents` controls whether spawned sub-agents can use this extension's own sub-agent tools. Default is `false` (nested sub-agents disabled). Set to `true` only if you explicitly want recursive fan-out.
 
-On session start, the extension sends an internal guidance message listing configured agent types and the active concurrency cap so tool-calling models can pick valid `agent` values.
-
 ### Live Widget
 
 Use `/subagent show` to watch sub-agents in a live-updating widget above the editor:

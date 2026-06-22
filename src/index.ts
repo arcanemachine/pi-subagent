@@ -1741,8 +1741,8 @@ export default function (pi: ExtensionAPI) {
     description:
       "Spawn a sub-agent to work on a task in parallel. " +
       "`agent` is required and must match a configured key in settings `pi-subagent.agents`. " +
-      "Returns immediately. An automatic completion message will be sent when the sub-agent finishes. " +
-      "Do NOT call subagent_status for routine polling. Wait for the completion message; only check status if the user asks or you suspect a stall.",
+      "Returns immediately; a completion message is delivered automatically as a new turn when the sub-agent finishes. " +
+      "Do NOT call subagent_status (or any tool) to poll; that only wastes turns. Continue other work or end your turn. Only check status if the user asks or you suspect a stall.",
     parameters: {
       type: "object",
       properties: {
@@ -1932,8 +1932,9 @@ export default function (pi: ExtensionAPI) {
     name: "subagent_notify",
     label: "Notify Sub-Agent",
     description:
-      "Send guidance to a running sub-agent by ID. " +
-      "Useful for follow-up instructions during long tasks.",
+      "Send guidance to a running sub-agent by ID. Use to redirect a sub-agent that is drifting from scope, " +
+      "answer a question it asked, or steer it toward finishing. Prefer this over killing and re-spawning " +
+      "when the sub-agent is still making progress but on the wrong track.",
     parameters: {
       type: "object",
       properties: {
@@ -2126,8 +2127,8 @@ export default function (pi: ExtensionAPI) {
     description:
       "Spawn multiple sub-agents to work on different tasks in parallel. " +
       "Each task must include an `agent` key that matches a configured type in `pi-subagent.agents`. " +
-      "Returns immediately after spawning; automatic completion messages will be sent as each sub-agent finishes. " +
-      "Do NOT call subagent_status for routine polling. Wait for the completion messages; only check status if the user asks or you suspect a stall.",
+      "Returns immediately after spawning; a completion message is delivered automatically as each sub-agent finishes. " +
+      "Do NOT call subagent_status (or any tool) to poll; that only wastes turns. Continue other work or end your turn. Only check status if the user asks or you suspect a stall.",
     parameters: {
       type: "object",
       properties: {
