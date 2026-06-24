@@ -1724,7 +1724,7 @@ export default function (pi: ExtensionAPI) {
         agent: {
           type: "string",
           description:
-            "Configured sub-agent type key from settings (for example: simple, smart, code-review)",
+            "Configured sub-agent type key from `pi-subagent.agents` (for example: example1, example2). Use a key that is actually configured; these are only placeholders.",
         },
         timeout_seconds: {
           type: "number",
@@ -2115,7 +2115,7 @@ export default function (pi: ExtensionAPI) {
               agent: {
                 type: "string",
                 description:
-                  "Configured sub-agent type key from settings (for example: simple, smart, code-review)",
+                  "Configured sub-agent type key from `pi-subagent.agents` (for example: example1, example2). Use a key that is actually configured; these are only placeholders.",
               },
               timeout_seconds: {
                 type: "number",

@@ -94,24 +94,26 @@ Example (`extra_context`, `max_active_subagents`, `default_timeout_seconds`, and
     "default_timeout_seconds": 600,
     "allow_nested_subagents": false,
     "agents": {
-      "simple": {
-        "model": "provider/some-simple-model",
-        "when_to_use": "For simple tasks"
+      "example1": {
+        "model": "provider/some-model",
+        "when_to_use": "For example task type 1"
       },
-      "smart": {
-        "model": "provider/some-smart-model",
-        "when_to_use": "For challenging tasks",
+      "example2": {
+        "model": "provider/some-other-model",
+        "when_to_use": "For example task type 2",
         "extra_context": "Think carefully and prefer correctness over speed."
       },
-      "code-review": {
-        "model": "provider/some-coding-model",
-        "when_to_use": "For reviewing code",
+      "example3": {
+        "model": "provider/yet-another-model",
+        "when_to_use": "For example task type 3",
         "extra_context": "Focus on correctness, edge cases, and actionable fixes."
       }
     }
   }
 }
 ```
+
+Replace `example1`, `example2`, and `example3` with keys you actually configure. The tool descriptions use these same placeholder names so the model does not mistake them for built-in agent types.
 
 Project settings override global settings by agent key. `max_active_subagents` is a hard cap on concurrently running sub-agents; spawn requests above the cap are rejected (not queued).
 
