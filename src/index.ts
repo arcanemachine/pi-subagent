@@ -34,6 +34,8 @@ interface SubAgent {
   timeoutEscalationHandle?: NodeJS.Timeout;
   completionNotified?: boolean;
   lastStateChangeAt?: number;
+  finalReportAttempts: number;
+  finalReportValidation?: ReportValidation;
 }
 
 const activeAgents = new Map<string, SubAgent>();
@@ -55,6 +57,7 @@ const MAX_ACTIVE_SUBAGENTS_CAP = 100;
 const MAX_DEFAULT_TIMEOUT_SECONDS = 86400;
 const TIMEOUT_WRAP_UP_WARNING_SECONDS = 60;
 const WATCH_WIDGET_UPDATE_INTERVAL_MS = 250;
+const MAX_FINAL_REPORT_ATTEMPTS = 3;
 let timeoutEscalationDelayMs = 30000;
 let watchWidgetUpdateHandle: NodeJS.Timeout | undefined;
 let lastWatchWidgetUpdateAt = 0;
@@ -77,8 +80,16 @@ type CommandValidation = {
   status: "pass" | "fail" | "unknown";
 };
 
+type EvidenceItem = {
+  source: string;
+  quote?: string;
+  note?: string;
+};
+
 type FinalReport = {
+  result: string;
   summary: string;
+  evidence: EvidenceItem[];
   changed_files: string[];
   commands: CommandValidation[];
   open_questions: string[];
@@ -92,10 +103,25 @@ type ConfidenceRating = {
   warnings: string[];
 };
 
+type ReportValidation = {
+  valid: boolean;
+  issues: string[];
+  warnings: string[];
+};
+
 const FINAL_REPORT_FENCE = "subagent_final_report";
 const STALE_RUNNING_MS = 60_000;
-const SUBAGENT_FINAL_REPORT_INSTRUCTIONS =
-  'Do the requested task only; do not expand scope. If the task is too large, partially complete the highest-value slice, then report what remains and stop. When finished (or when blocked by scope), include a final machine-parseable block exactly once using this fenced JSON format:\n```subagent_final_report\n{"summary":"...","changed_files":["path/file"],"commands":[{"command":"npm test","status":"pass"}],"open_questions":["..."],"confidence":0.0}\n```\nKeep it terse. Use empty arrays when none. Stop immediately after this final block.';
+const SUBAGENT_FINAL_REPORT_INSTRUCTIONS = `Do the requested task only; do not expand scope. If the task is too large, partially complete the highest-value slice, then report what remains and stop.
+
+When finished (or blocked), your final response must be exactly one fenced JSON block and nothing else. Do not include prose before or after it. Do not include planning/process narration such as "Let me research", "I'll check", or "Now I have comprehensive data".
+
+The JSON must contain the actual deliverable in result. Use evidence for file paths, URLs, commands, or quotes that support the result. Use empty arrays when none. If you lack enough evidence, say what is missing in result/open_questions and keep confidence below 0.5.
+
+Format:
+\`\`\`${FINAL_REPORT_FENCE}
+{"result":"actual answer/findings here","summary":"one-sentence summary","evidence":[{"source":"path/url/command","quote":"supporting quote or output","note":"why it matters"}],"changed_files":["path/file"],"commands":[{"command":"npm test","status":"pass"}],"open_questions":["..."],"confidence":0.0}
+\`\`\`
+Stop immediately after this block.`;
 function readJsonFile(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
 
@@ -441,19 +467,29 @@ function notifyAgentCompletion(agent: SubAgent) {
   const exitText =
     agent.exitCode !== undefined ? ` | exit=${agent.exitCode}` : "";
   const reportData = getAgentReportData(agent.id, DEFAULT_REPORT_COUNT);
-  const assistantText = extractAssistantText(agent).trim();
-  const sanitizedReportText = sanitizeAssistantReportText(assistantText);
-  const fullReportText =
-    sanitizedReportText ||
-    assistantText ||
-    "(no assistant final text captured)";
+  const finalReport = reportData.finalReport;
+  const validation = reportData.finalReportValidation;
+  const resultText = finalReport?.result || "(no valid result captured)";
+  const validationText = validation.valid
+    ? "passed"
+    : `failed (${formatReportValidationProblems(validation)})`;
+  const evidenceText = finalReport?.evidence.length
+    ? finalReport.evidence
+        .map((item) => {
+          const details = [item.quote, item.note].filter(Boolean).join(" — ");
+          return `- ${item.source}${details ? `: ${details}` : ""}`;
+        })
+        .join("\n")
+    : "(none)";
 
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
       ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}` +
-      `\nconfidence rating: ${reportData.confidenceRating.score}/${reportData.confidenceRating.maxScore}` +
-      `\nsummary: ${reportData.finalReport?.summary || "(missing structured final report block)"}` +
-      `\nfull_report:\n\`\`\`text\n${fullReportText}\n\`\`\``,
+      `\nreport validation: ${validationText}` +
+      `\nreport completeness: ${reportData.confidenceRating.score}/${reportData.confidenceRating.maxScore}` +
+      `\nsummary: ${finalReport?.summary || "(missing structured final report block)"}` +
+      `\nresult:\n\`\`\`text\n${resultText}\n\`\`\`` +
+      `\nevidence:\n${evidenceText}`,
     {
       agentId: agent.id,
       status: agent.status,
@@ -464,8 +500,9 @@ function notifyAgentCompletion(agent: SubAgent) {
       exitCode: agent.exitCode,
       timedOut: !!agent.timeoutNotified,
       timeoutSeconds: agent.timeoutSeconds,
-      finalReportText: fullReportText,
+      finalReportText: resultText,
       finalReport: reportData.finalReport,
+      finalReportValidation: validation,
       confidenceRating: reportData.confidenceRating,
       reviewChecklist: reportData.reviewChecklist,
     },
@@ -515,6 +552,7 @@ function spawnSubAgent(
     lastAction: "starting",
     lastActivity: Date.now(),
     receivedEvent: false,
+    finalReportAttempts: 0,
   };
 
   // Handle stdout (JSON events)
@@ -561,9 +599,8 @@ function spawnSubAgent(
         if (event.type === "agent_start") {
           transitionAgentStatus(agent, "running", "started");
         } else if (event.type === "agent_end") {
-          transitionAgentStatus(agent, "completed", "finished");
-          notifyAgentCompletion(agent);
-          // Force immediate widget update on completion
+          handleAgentCompletionCandidate(agent, "finished", true);
+          // Force immediate widget update on completion or retry
           updateSubAgentStatus();
           // Update watch widget if being watched
           if (watchedAgentIds.has(id)) {
@@ -604,10 +641,12 @@ function spawnSubAgent(
         "error",
         `exited with code ${code ?? "unknown"}`,
       );
+      notifyAgentCompletion(agent);
     } else if (agent.status !== "completed" && agent.status !== "error") {
-      transitionAgentStatus(agent, "completed", "process exited");
+      handleAgentCompletionCandidate(agent, "process exited", false);
+    } else {
+      notifyAgentCompletion(agent);
     }
-    notifyAgentCompletion(agent);
     updateSubAgentStatus();
     // Update watch widget if being watched
     if (watchedAgentIds.has(id)) {
@@ -951,28 +990,36 @@ function extractAssistantText(agent: SubAgent): string {
   return text;
 }
 
-function sanitizeAssistantReportText(text: string): string {
-  let cleaned = text.trim();
-
-  const finalReportFenceRegex = new RegExp(
-    "\\n?```" + FINAL_REPORT_FENCE + "[\\s\\S]*?```\\s*$",
-    "i",
-  );
-  cleaned = cleaned.replace(finalReportFenceRegex, "").trim();
-
-  const recipeStartIndex = cleaned.search(/^Recipe name:/im);
-  if (recipeStartIndex > 0) {
-    cleaned = cleaned.slice(recipeStartIndex).trim();
-  }
-
-  cleaned = cleaned.replace(/^here(?:'s| is) the report:\s*/i, "").trim();
-
-  return cleaned;
-}
-
 function normalizeParsedFinalReport(parsed: Partial<FinalReport>): FinalReport {
   return {
+    result: typeof parsed.result === "string" ? parsed.result.trim() : "",
     summary: typeof parsed.summary === "string" ? parsed.summary.trim() : "",
+    evidence: Array.isArray(parsed.evidence)
+      ? parsed.evidence
+          .map((value) => {
+            if (!value || typeof value !== "object") return null;
+            const candidate = value as Record<string, unknown>;
+            const source =
+              typeof candidate.source === "string"
+                ? candidate.source.trim()
+                : "";
+            const quote =
+              typeof candidate.quote === "string"
+                ? candidate.quote.trim()
+                : undefined;
+            const note =
+              typeof candidate.note === "string"
+                ? candidate.note.trim()
+                : undefined;
+            if (!source) return null;
+            return {
+              source,
+              ...(quote ? { quote } : {}),
+              ...(note ? { note } : {}),
+            };
+          })
+          .filter((value): value is EvidenceItem => !!value)
+      : [],
     changed_files: Array.isArray(parsed.changed_files)
       ? parsed.changed_files
           .filter((value): value is string => typeof value === "string")
@@ -1016,10 +1063,15 @@ function normalizeParsedFinalReport(parsed: Partial<FinalReport>): FinalReport {
 }
 
 function extractFinalReportJsonBlock(text: string): string | null {
-  const fenced = text.match(
-    new RegExp("```" + FINAL_REPORT_FENCE + "\\s*([\\s\\S]*?)```", "i"),
+  const fencedRegex = new RegExp(
+    "```" + FINAL_REPORT_FENCE + "\\s*([\\s\\S]*?)```",
+    "gi",
   );
-  if (fenced?.[1]?.trim()) return fenced[1].trim();
+  const fencedMatches = Array.from(text.matchAll(fencedRegex));
+  for (let index = fencedMatches.length - 1; index >= 0; index--) {
+    const rawJson = fencedMatches[index]?.[1]?.trim();
+    if (rawJson) return rawJson;
+  }
 
   const marker = FINAL_REPORT_FENCE;
   const markerIndex = text.toLowerCase().lastIndexOf(marker.toLowerCase());
@@ -1058,11 +1110,164 @@ function parseFinalReportFromTexts(texts: string[]): FinalReport | null {
 }
 
 function parseFinalReport(agent: SubAgent): FinalReport | null {
+  return parseFinalReportFromTexts([extractAssistantText(agent)]);
+}
+
+function removeFinalReportBlock(text: string): string {
+  const fenced = new RegExp(
+    "```" + FINAL_REPORT_FENCE + "\\s*[\\s\\S]*?```",
+    "gi",
+  );
+  return text.replace(fenced, "").trim();
+}
+
+function looksLikeProcessNarration(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  const processPhraseCount =
+    trimmed.match(
+      /\b(?:let me|i'll|i will|i should|i'm going to|now i have|let's)\b/gi,
+    )?.length ?? 0;
+
+  return processPhraseCount >= 3;
+}
+
+function hasSupportingEvidence(finalReport: FinalReport): boolean {
+  return (
+    finalReport.evidence.length > 0 ||
+    finalReport.changed_files.length > 0 ||
+    finalReport.commands.length > 0
+  );
+}
+
+function validateFinalReport(
+  finalReport: FinalReport | null,
+  assistantText: string,
+): ReportValidation {
+  const issues: string[] = [];
+  const warnings: string[] = [];
+
+  if (!finalReport) {
+    return {
+      valid: false,
+      issues: ["missing_final_report_block"],
+      warnings,
+    };
+  }
+
+  if (!finalReport.result) issues.push("missing_result");
+  if (!finalReport.summary) issues.push("missing_summary");
+  if (finalReport.confidence === null) issues.push("missing_confidence");
+
+  if (finalReport.result && looksLikeProcessNarration(finalReport.result)) {
+    issues.push("result_looks_like_process_log");
+  }
+
+  if (!hasSupportingEvidence(finalReport)) {
+    if (finalReport.confidence !== null && finalReport.confidence >= 0.5) {
+      issues.push("missing_supporting_evidence");
+    } else {
+      warnings.push("no_supporting_evidence");
+    }
+  }
+
+  const extraAssistantText = removeFinalReportBlock(assistantText);
+  if (extraAssistantText) {
+    warnings.push("extraneous_text_outside_final_report_block");
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues,
+    warnings,
+  };
+}
+
+function getCurrentFinalReportValidation(agent: SubAgent): {
+  assistantText: string;
+  finalReport: FinalReport | null;
+  validation: ReportValidation;
+} {
   const assistantText = extractAssistantText(agent);
-  return parseFinalReportFromTexts([
-    assistantText,
-    buildReportEntries(agent).join("\n"),
-  ]);
+  const finalReport = parseFinalReport(agent);
+  const validation = validateFinalReport(finalReport, assistantText);
+  return { assistantText, finalReport, validation };
+}
+
+function formatReportValidationProblems(validation: ReportValidation): string {
+  const problems = [
+    ...validation.issues.map((issue) => `issue:${issue}`),
+    ...validation.warnings.map((warning) => `warning:${warning}`),
+  ];
+  return problems.length > 0 ? problems.join(", ") : "none";
+}
+
+function buildFinalReportRetryPrompt(validation: ReportValidation): string {
+  return (
+    "Your previous final report failed validation. Do not do more research or expand scope unless required to fill missing report fields. Rewrite the final response now.\n\n" +
+    `Validation problems: ${formatReportValidationProblems(validation)}\n\n` +
+    "Return exactly one fenced JSON block and nothing else. Put the actual deliverable in `result`. Do not include planning/process narration such as `Let me...` or `I'll check...`.\n\n" +
+    `\`\`\`${FINAL_REPORT_FENCE}\n` +
+    '{"result":"actual answer/findings here","summary":"one-sentence summary","evidence":[{"source":"path/url/command","quote":"supporting quote or output","note":"why it matters"}],"changed_files":[],"commands":[],"open_questions":[],"confidence":0.0}\n' +
+    "```"
+  );
+}
+
+function requestFinalReportRewrite(
+  agent: SubAgent,
+  validation: ReportValidation,
+): boolean {
+  if (!agent.process.stdin || agent.process.stdin.destroyed) return false;
+
+  const message = buildFinalReportRetryPrompt(validation);
+  const prompt = JSON.stringify({ type: "prompt", message });
+  agent.process.stdin.write(prompt + "\n");
+  agent.output.push(
+    JSON.stringify({
+      type: "parent_notify",
+      mode: "final_report_retry",
+      text: message,
+      timestamp: Date.now(),
+    }),
+  );
+  agent.currentTool = undefined;
+  agent.lastAction = `retrying final report (${agent.finalReportAttempts}/${MAX_FINAL_REPORT_ATTEMPTS})`;
+  agent.lastActivity = Date.now();
+  updateSubAgentStatus();
+  if (watchedAgentIds.has(agent.id)) {
+    updateWatchWidget();
+  }
+
+  return true;
+}
+
+function handleAgentCompletionCandidate(
+  agent: SubAgent,
+  completionAction: string,
+  allowRetry: boolean,
+): void {
+  const { validation } = getCurrentFinalReportValidation(agent);
+  agent.finalReportAttempts += 1;
+  agent.finalReportValidation = validation;
+
+  if (validation.valid) {
+    transitionAgentStatus(agent, "completed", completionAction);
+    notifyAgentCompletion(agent);
+    return;
+  }
+
+  if (
+    allowRetry &&
+    agent.finalReportAttempts < MAX_FINAL_REPORT_ATTEMPTS &&
+    requestFinalReportRewrite(agent, validation)
+  ) {
+    return;
+  }
+
+  const reason = formatReportValidationProblems(validation);
+  transitionAgentStatus(agent, "error", `invalid final report: ${reason}`);
+  notifyAgentCompletion(agent);
 }
 
 function buildConfidenceRating(
@@ -1078,13 +1283,14 @@ function buildConfidenceRating(
   }
 
   let score = 1;
+  if (!finalReport.result) missing.push("result");
+  else score++;
+
   if (!finalReport.summary) missing.push("summary");
   else score++;
 
-  if (finalReport.changed_files.length === 0) missing.push("changed_files");
-  else score++;
-
-  if (finalReport.commands.length === 0) missing.push("commands");
+  if (!hasSupportingEvidence(finalReport))
+    warnings.push("no_supporting_evidence");
   else score++;
 
   if (finalReport.confidence === null) missing.push("confidence");
@@ -1239,6 +1445,7 @@ function getAgentReportData(
   recentEntries: string[];
   count: number;
   finalReport: FinalReport | null;
+  finalReportValidation: ReportValidation;
   confidenceRating: ConfidenceRating;
   reviewChecklist: string[];
 } {
@@ -1253,6 +1460,11 @@ function getAgentReportData(
       recentEntries: [],
       count,
       finalReport: null,
+      finalReportValidation: {
+        valid: false,
+        issues: ["agent_not_found"],
+        warnings: [],
+      },
       confidenceRating: { score: 0, maxScore: 5, missing: [], warnings: [] },
       reviewChecklist: [],
     };
@@ -1282,7 +1494,7 @@ function getAgentReportData(
 
   const entries = buildReportEntries(agent);
   const recentEntries = entries.slice(-count);
-  const finalReport = parseFinalReport(agent);
+  const { finalReport, validation } = getCurrentFinalReportValidation(agent);
   const confidenceRating = buildConfidenceRating(finalReport, entries);
   const reviewChecklist = buildReviewChecklist(finalReport);
 
@@ -1295,6 +1507,7 @@ function getAgentReportData(
     recentEntries,
     count,
     finalReport,
+    finalReportValidation: validation,
     confidenceRating,
     reviewChecklist,
   };
@@ -1312,15 +1525,18 @@ function getAgentReport(id: string, requestedCount?: number): string {
   const finalBlock = report.finalReport
     ? [
         "## Final deliverable",
+        `validation: ${report.finalReportValidation.valid ? "passed" : `failed (${formatReportValidationProblems(report.finalReportValidation)})`}`,
+        `result: ${report.finalReport.result || "(empty)"}`,
         `summary: ${report.finalReport.summary || "(empty)"}`,
+        `evidence: ${report.finalReport.evidence.map((item) => item.source).join(", ") || "(none)"}`,
         `changed_files: ${report.finalReport.changed_files.join(", ") || "(none)"}`,
         `commands: ${report.finalReport.commands.map((c) => `${c.command}=${c.status}`).join(", ") || "(none)"}`,
         `open_questions: ${report.finalReport.open_questions.join(" | ") || "(none)"}`,
         `confidence: ${report.finalReport.confidence ?? "(missing)"}`,
       ].join("\n")
-    : "## Final deliverable\n(missing structured final report block)";
+    : `## Final deliverable\n(missing structured final report block)\nvalidation: failed (${formatReportValidationProblems(report.finalReportValidation)})`;
 
-  const confidenceBlock = `confidence rating: ${report.confidenceRating.score}/${report.confidenceRating.maxScore}`;
+  const confidenceBlock = `report completeness: ${report.confidenceRating.score}/${report.confidenceRating.maxScore}`;
   const checklistBlock = `checklist:\n${report.reviewChecklist.map((item) => `- ${item}`).join("\n")}`;
 
   return `${finalBlock}\n\n${confidenceBlock}\n${checklistBlock}\n\n## Recent activity (last ${report.count})\n\n${diagnosticsBlock}${report.recentEntries.join("\n\n") || "(no activity yet)"}`;
@@ -2293,6 +2509,8 @@ export const __test = {
 
   parseFinalReportFromTexts,
   buildConfidenceRating,
+  validateFinalReport,
+  handleAgentCompletionCandidate,
   getAgentReportData,
 
   setDefaultTimeoutSeconds(seconds: number | undefined) {
@@ -2331,6 +2549,7 @@ export const __test = {
       startTime: Date.now(),
       lastActivity: Date.now(),
       receivedEvent: true,
+      finalReportAttempts: 0,
       ...overrides,
     };
 

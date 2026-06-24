@@ -63,7 +63,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `subagent_list_types` - List configured agent types (name/model/when_to_use)
 - `subagent_spawn_parallel` - Spawn multiple sub-agents, return immediately, and receive completion messages (required per-task `agent`)
 
-Sub-agents are prompted to emit a machine-parseable final JSON block (`subagent_final_report`) containing summary, changed files, commands, open questions, and confidence. Completion messages include compact final deliverable details, and completed sub-agents are automatically removed from active tracking.
+Sub-agents are prompted to emit exactly one machine-parseable final JSON block (`subagent_final_report`) containing the actual `result`, summary, evidence, changed files, commands, open questions, and confidence. Completion messages use the structured `result` as the authoritative deliverable instead of freeform assistant prose. If a sub-agent ends with an invalid final report, the extension asks it to rewrite the block up to three attempts before reporting a validation failure. Completed sub-agents are automatically removed from active tracking.
 
 #### Agent resolution behavior
 
