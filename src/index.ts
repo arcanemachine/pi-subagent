@@ -59,6 +59,13 @@ const TIMEOUT_WRAP_UP_WARNING_SECONDS = 60;
 const WATCH_WIDGET_UPDATE_INTERVAL_MS = 250;
 const MAX_FINAL_REPORT_ATTEMPTS = 3;
 let timeoutEscalationDelayMs = 30000;
+
+// Temporarily disabled while we investigate issues with parallel sub-agent dispatch.
+// Multiple concurrent final-report streams appear to interfere with structured
+// `subagent_final_report` parsing. Re-enable once that is fixed.
+// Set to true to re-register the `subagent_spawn_parallel` tool.
+const ENABLE_SPAWN_PARALLEL_TOOL = false;
+
 let watchWidgetUpdateHandle: NodeJS.Timeout | undefined;
 let lastWatchWidgetUpdateAt = 0;
 
@@ -2307,152 +2314,155 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // Tool: Spawn multiple sub-agents in parallel
-  pi.registerTool({
-    name: "subagent_spawn_parallel",
-    label: "Spawn Parallel Sub-Agents",
-    description:
-      "Spawn multiple sub-agents to work on different tasks in parallel. " +
-      "Each task must include an `agent` key that matches a configured type in `pi-subagent.agents`. " +
-      "Returns immediately after spawning; a completion message is delivered automatically as each sub-agent finishes. " +
-      "Do NOT call subagent_status (or any tool) to poll; that only wastes turns. Continue other work or end your turn. Only check status if the user asks or you suspect a stall.",
-    parameters: {
-      type: "object",
-      properties: {
-        tasks: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              task: {
-                type: "string",
-                description: "Task prompt to run in this sub-agent",
+  // Tool: Spawn multiple sub-agents in parallel (temporarily disabled)
+  if (ENABLE_SPAWN_PARALLEL_TOOL) {
+    pi.registerTool({
+      name: "subagent_spawn_parallel",
+      label: "Spawn Parallel Sub-Agents",
+      description:
+        "Spawn multiple sub-agents to work on different tasks in parallel. " +
+        "Each task must include an `agent` key that matches a configured type in `pi-subagent.agents`. " +
+        "Returns immediately after spawning; a completion message is delivered automatically as each sub-agent finishes. " +
+        "Do NOT call subagent_status (or any tool) to poll; that only wastes turns. Continue other work or end your turn. Only check status if the user asks or you suspect a stall.",
+      parameters: {
+        type: "object",
+        properties: {
+          tasks: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                task: {
+                  type: "string",
+                  description: "Task prompt to run in this sub-agent",
+                },
+                agent: {
+                  type: "string",
+                  description:
+                    "Configured sub-agent type key from `pi-subagent.agents` (for example: example1, example2). Use a key that is actually configured; these are only placeholders.",
+                },
+                timeout_seconds: {
+                  type: "number",
+                  description:
+                    "Optional per-run timeout in seconds for this task only.",
+                },
               },
-              agent: {
-                type: "string",
-                description:
-                  "Configured sub-agent type key from `pi-subagent.agents` (for example: example1, example2). Use a key that is actually configured; these are only placeholders.",
-              },
-              timeout_seconds: {
-                type: "number",
-                description:
-                  "Optional per-run timeout in seconds for this task only.",
-              },
+              required: ["task", "agent"],
             },
-            required: ["task", "agent"],
+            description:
+              "Array of task descriptors, each with task + agent type",
           },
-          description: "Array of task descriptors, each with task + agent type",
         },
-      },
-      required: ["tasks"],
-    } as any,
-    async execute(
-      toolCallId,
-      params: {
-        tasks: Array<{
-          task: string;
-          agent: string;
-          timeout_seconds?: number;
-        }>;
-      },
-      signal,
-      onUpdate,
-      ctx,
-    ) {
-      refreshConfiguredAgents(ctx.cwd);
+        required: ["tasks"],
+      } as any,
+      async execute(
+        toolCallId,
+        params: {
+          tasks: Array<{
+            task: string;
+            agent: string;
+            timeout_seconds?: number;
+          }>;
+        },
+        signal,
+        onUpdate,
+        ctx,
+      ) {
+        refreshConfiguredAgents(ctx.cwd);
 
-      const limitError = getSpawnLimitErrorMessage(params.tasks.length);
-      if (limitError) {
-        return {
-          content: [{ type: "text", text: limitError }],
-          isError: true,
-          details: {
-            rejected: true,
-            reason: "max_active_subagents_reached",
-            active: getActiveAgentCount(),
-            maxActive: maxActiveSubagents,
-            requested: params.tasks.length,
-          },
-        };
-      }
-
-      const agents: SubAgent[] = [];
-
-      // Spawn all agents
-      for (const taskSpec of params.tasks) {
-        const manualTimeoutSeconds = normalizeManualTimeoutSeconds(
-          taskSpec.timeout_seconds,
-        );
-        if (taskSpec.timeout_seconds !== undefined && !manualTimeoutSeconds) {
+        const limitError = getSpawnLimitErrorMessage(params.tasks.length);
+        if (limitError) {
           return {
-            content: [
-              {
-                type: "text",
-                text: `Invalid timeout_seconds for task '${taskSpec.task.slice(0, 40)}'. Use a positive integer in seconds.`,
-              },
-            ],
+            content: [{ type: "text", text: limitError }],
             isError: true,
             details: {
               rejected: true,
-              reason: "invalid_timeout_seconds",
-              task: taskSpec.task,
-              timeoutSeconds: taskSpec.timeout_seconds,
+              reason: "max_active_subagents_reached",
+              active: getActiveAgentCount(),
+              maxActive: maxActiveSubagents,
+              requested: params.tasks.length,
             },
           };
         }
 
-        const profile = resolveSubagentProfile(taskSpec.agent, ctx);
-        agents.push(
-          spawnSubAgent(
-            taskSpec.task,
-            profile.model,
-            taskSpec.agent,
-            profile.extra_context,
-            manualTimeoutSeconds,
-          ),
-        );
-      }
+        const agents: SubAgent[] = [];
 
-      onUpdate?.({
-        content: [
-          {
-            type: "text",
-            text:
-              `Spawned ${agents.length} sub-agents:\n` +
-              agents
-                .map(
-                  (a) =>
-                    `- ${a.id}: [${a.agentType || "unknown"}] ${a.model || "(unknown)"} | ${a.taskTitle}`,
-                )
-                .join("\n"),
-          },
-        ],
-        details: { agentCount: agents.length },
-      });
+        // Spawn all agents
+        for (const taskSpec of params.tasks) {
+          const manualTimeoutSeconds = normalizeManualTimeoutSeconds(
+            taskSpec.timeout_seconds,
+          );
+          if (taskSpec.timeout_seconds !== undefined && !manualTimeoutSeconds) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Invalid timeout_seconds for task '${taskSpec.task.slice(0, 40)}'. Use a positive integer in seconds.`,
+                },
+              ],
+              isError: true,
+              details: {
+                rejected: true,
+                reason: "invalid_timeout_seconds",
+                task: taskSpec.task,
+                timeoutSeconds: taskSpec.timeout_seconds,
+              },
+            };
+          }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `Spawned ${agents.length} sub-agents and returning immediately. ` +
-              "A completion message will arrive automatically as each one finishes — you do not need to check. " +
-              "Do NOT call subagent_status (or any tool) to poll; that only wastes turns. " +
-              "Continue with other work or end your turn. Only check status if the user asks or you suspect a stall.",
+          const profile = resolveSubagentProfile(taskSpec.agent, ctx);
+          agents.push(
+            spawnSubAgent(
+              taskSpec.task,
+              profile.model,
+              taskSpec.agent,
+              profile.extra_context,
+              manualTimeoutSeconds,
+            ),
+          );
+        }
+
+        onUpdate?.({
+          content: [
+            {
+              type: "text",
+              text:
+                `Spawned ${agents.length} sub-agents:\n` +
+                agents
+                  .map(
+                    (a) =>
+                      `- ${a.id}: [${a.agentType || "unknown"}] ${a.model || "(unknown)"} | ${a.taskTitle}`,
+                  )
+                  .join("\n"),
+            },
+          ],
+          details: { agentCount: agents.length },
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Spawned ${agents.length} sub-agents and returning immediately. ` +
+                "A completion message will arrive automatically as each one finishes — you do not need to check. " +
+                "Do NOT call subagent_status (or any tool) to poll; that only wastes turns. " +
+                "Continue with other work or end your turn. Only check status if the user asks or you suspect a stall.",
+            },
+          ],
+          details: {
+            agents: agents.map((a) => ({
+              id: a.id,
+              status: a.status,
+              taskTitle: a.taskTitle,
+              agentType: a.agentType,
+              model: a.model,
+            })),
           },
-        ],
-        details: {
-          agents: agents.map((a) => ({
-            id: a.id,
-            status: a.status,
-            taskTitle: a.taskTitle,
-            agentType: a.agentType,
-            model: a.model,
-          })),
-        },
-      };
-    },
-  });
+        };
+      },
+    });
+  }
 
   // Clean up on shutdown
   pi.on("session_shutdown", async () => {
