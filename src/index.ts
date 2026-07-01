@@ -1,8 +1,10 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
+  Theme,
 } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Box, Markdown, type Component, Text } from "@earendil-works/pi-tui";
 import { spawn, ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -1624,6 +1626,54 @@ function notifySubAgent(
   return { ok: true };
 }
 
+type MessageContent = string | Array<{ type: string; text?: string }>;
+
+/**
+ * Render a sub-agent custom message as a Ctrl+O-collapsible block.
+ * Collapsed shows a concise one-liner; expanded shows the full message content.
+ * Styling mirrors Pi's built-in custom-message component (customMessageBg +
+ * customMessageText) so collapsed/expanded blocks match other custom messages.
+ */
+function renderSubagentMessage(
+  content: MessageContent,
+  expanded: boolean,
+  collapsedLine: string,
+  theme: Theme,
+): Component {
+  const box = new Box(1, 1, (t: string) => theme.bg("customMessageBg", t));
+  if (expanded) {
+    const text =
+      typeof content === "string"
+        ? content
+        : content
+            .filter((c) => c.type === "text")
+            .map((c) => c.text || "")
+            .join("\n");
+    box.addChild(
+      new Markdown(text, 0, 0, getMarkdownTheme(), {
+        color: (t: string) => theme.fg("customMessageText", t),
+      }),
+    );
+  } else {
+    box.addChild(new Text(theme.fg("customMessageText", collapsedLine), 0, 0));
+  }
+  return box;
+}
+
+type SubagentCompleteDetails = {
+  agentId?: string;
+  status?: "completed" | "error" | string;
+  taskTitle?: string;
+  agentType?: string;
+  durationSec?: number;
+};
+
+type SubagentSpawnedDetails = {
+  agentId?: string;
+  agentType?: string;
+  taskTitle?: string;
+};
+
 export default function (pi: ExtensionAPI) {
   sendCompletionMessage = (
     content: string,
@@ -1647,6 +1697,43 @@ export default function (pi: ExtensionAPI) {
         : undefined,
     );
   };
+
+  // Collapsible rendering for sub-agent messages. Collapsed shows a concise
+  // one-liner; expanded shows the full content. Toggled by Pi's global
+  // Ctrl+O (app.tools.expand), the same control used for tool output.
+  pi.registerMessageRenderer(
+    "subagent-complete",
+    (message, { expanded }, theme) => {
+      const details = (message.details ?? undefined) as
+        | SubagentCompleteDetails
+        | undefined;
+      const isError = details?.status === "error";
+      const statusText = isError ? "errored" : "completed";
+      const emoji = isError ? "❌" : "✅";
+      const duration =
+        typeof details?.durationSec === "number"
+          ? `${details.durationSec}s`
+          : "?";
+      const agentType = details?.agentType || "unknown";
+      const taskTitle = details?.taskTitle || "(untitled task)";
+      const collapsed = `${emoji} Sub-agent ${details?.agentId ?? "?"} ${statusText} in ${duration} | [${agentType}] ${taskTitle}`;
+      return renderSubagentMessage(message.content, expanded, collapsed, theme);
+    },
+  );
+
+  pi.registerMessageRenderer(
+    "subagent-spawned",
+    (message, { expanded }, theme) => {
+      const details = (message.details ?? undefined) as
+        | SubagentSpawnedDetails
+        | undefined;
+      const agentType = details?.agentType || "unknown";
+      const taskTitle = details?.taskTitle || "(untitled task)";
+      const collapsed = `🚀 Sub-agent ${details?.agentId ?? "?"} | [${agentType}] ${taskTitle}`;
+      return renderSubagentMessage(message.content, expanded, collapsed, theme);
+    },
+  );
+
   if (isTruthyEnv(process.env.PI_SUBAGENT_DISABLE_RECURSION)) {
     return;
   }
@@ -1764,6 +1851,11 @@ export default function (pi: ExtensionAPI) {
               `Model: ${agent.model || "(unknown)"}\n` +
               `Timeout: ${agent.timeoutSeconds ? `${agent.timeoutSeconds}s` : "(none)"}`,
             display: true,
+            details: {
+              agentId: agent.id,
+              agentType: agent.agentType,
+              taskTitle: agent.taskTitle,
+            },
           });
         } catch (error: unknown) {
           ctx.ui.notify(
