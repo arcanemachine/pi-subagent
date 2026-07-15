@@ -9,7 +9,8 @@ A pi extension that enables spawning sub-agents via RPC for parallel task execut
 - Manage multiple concurrent sub-agents
 - Track status and output of running sub-agents
 - Live widget to watch sub-agent activity in real-time
-- Automatic cleanup on session shutdown and `/new`
+- Automatic child-process cleanup after completion, session shutdown, and `/new`
+- Bounded in-memory activity history for long-running sub-agents
 
 ## Installation
 
@@ -62,7 +63,7 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `subagent_kill` - Kill a specific sub-agent by ID
 - `subagent_list_types` - List configured agent types (name/model/when_to_use)
 
-Sub-agents are prompted to emit exactly one machine-parseable final JSON block (`subagent_final_report`) containing the actual `result`, summary, evidence, changed files, commands, open questions, and confidence. Completion messages use the structured `result` as the authoritative deliverable instead of freeform assistant prose. If a sub-agent ends with an invalid final report, the extension asks it to rewrite the block up to three attempts before reporting a validation failure. Completed sub-agents are automatically removed from active tracking.
+Child sub-agents receive a dedicated `subagent_complete` tool with one required `result` field. Calling it submits the complete deliverable and gracefully shuts down the child process. If a child omits the tool, its final assistant response is used as a fallback so useful work is not discarded over formatting. Empty, errored, aborted, or truncated responses are reported as failures. Completed sub-agents are automatically removed from active tracking.
 
 #### Agent resolution behavior
 
@@ -114,7 +115,7 @@ Example (`extra_context`, `max_active_subagents`, `default_timeout_seconds`, and
 
 Replace `example1`, `example2`, and `example3` with keys you actually configure. The tool descriptions use these same placeholder names so the model does not mistake them for built-in agent types.
 
-Project settings override global settings by agent key. `max_active_subagents` is a hard cap on concurrently running sub-agents; spawn requests above the cap are rejected (not queued).
+Project settings override global settings by agent key. `max_active_subagents` is an optional hard cap on concurrently running sub-agents; spawn requests above the configured cap are rejected (not queued). If omitted, concurrency is unlimited.
 
 `default_timeout_seconds` controls an automatic timeout notification for each spawned sub-agent. When the timeout is reached, the parent sends guidance asking the sub-agent to report progress so far and finish up. The default is no timeout.
 

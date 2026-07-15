@@ -18,10 +18,22 @@ interface SubAgent {
   model?: string;
   extraContext?: string;
   status: "starting" | "running" | "completed" | "error";
-  output: string[];
+  activity: string[];
+  currentResponsePreview: string;
+  lastAssistantText?: string;
+  lastAssistantStopReason?: string;
+  lastAssistantError?: string;
+  completionResult?: string;
+  partialResult?: string;
+  failureReason?:
+    | "missing_result"
+    | "incomplete_result"
+    | "assistant_error"
+    | "process_error";
   startTime: number;
   endTime?: number;
   exitCode?: number;
+  processExited?: boolean;
   currentTool?: string;
   lastAction?: string;
   progressPercent?: number;
@@ -34,10 +46,9 @@ interface SubAgent {
   timeoutWarningHandle?: NodeJS.Timeout;
   timeoutHandle?: NodeJS.Timeout;
   timeoutEscalationHandle?: NodeJS.Timeout;
+  shutdownHandle?: NodeJS.Timeout;
   completionNotified?: boolean;
   lastStateChangeAt?: number;
-  finalReportAttempts: number;
-  finalReportValidation?: ReportValidation;
 }
 
 const activeAgents = new Map<string, SubAgent>();
@@ -53,19 +64,18 @@ let sendCompletionMessage:
   | ((content: string, details?: Record<string, unknown>) => void)
   | null = null;
 
-const DEFAULT_REPORT_COUNT = 3;
-const MAX_REPORT_COUNT = 50;
 const MAX_ACTIVE_SUBAGENTS_CAP = 100;
 const MAX_DEFAULT_TIMEOUT_SECONDS = 86400;
+const MAX_ACTIVITY_ENTRIES = 50;
+const MAX_ACTIVITY_ENTRY_CHARS = 1000;
+const MAX_RESPONSE_PREVIEW_CHARS = 4000;
+const PROCESS_SHUTDOWN_GRACE_MS = 2000;
 const TIMEOUT_WRAP_UP_WARNING_SECONDS = 60;
 const WATCH_WIDGET_UPDATE_INTERVAL_MS = 250;
-const MAX_FINAL_REPORT_ATTEMPTS = 3;
 let timeoutEscalationDelayMs = 30000;
 
-// Temporarily disabled while we investigate issues with parallel sub-agent dispatch.
-// Multiple concurrent final-report streams appear to interfere with structured
-// `subagent_final_report` parsing. Re-enable once that is fixed.
-// Set to true to re-register the `subagent_spawn_parallel` tool.
+// Keep parallel dispatch disabled until the new completion flow has been
+// exercised with multiple simultaneous children.
 const ENABLE_SPAWN_PARALLEL_TOOL = false;
 
 let watchWidgetUpdateHandle: NodeJS.Timeout | undefined;
@@ -84,53 +94,12 @@ type PiSubagentSettings = {
   allow_nested_subagents?: boolean;
 };
 
-type CommandValidation = {
-  command: string;
-  status: "pass" | "fail" | "unknown";
-};
-
-type EvidenceItem = {
-  source: string;
-  quote?: string;
-  note?: string;
-};
-
-type FinalReport = {
-  result: string;
-  summary: string;
-  evidence: EvidenceItem[];
-  changed_files: string[];
-  commands: CommandValidation[];
-  open_questions: string[];
-  confidence: number | null;
-};
-
-type ConfidenceRating = {
-  score: number;
-  maxScore: number;
-  missing: string[];
-  warnings: string[];
-};
-
-type ReportValidation = {
-  valid: boolean;
-  issues: string[];
-  warnings: string[];
-};
-
-const FINAL_REPORT_FENCE = "subagent_final_report";
 const STALE_RUNNING_MS = 60_000;
-const SUBAGENT_FINAL_REPORT_INSTRUCTIONS = `Do the requested task only; do not expand scope. If the task is too large, partially complete the highest-value slice, then report what remains and stop.
+const SUBAGENT_COMPLETION_INSTRUCTIONS = `Do the requested task only; do not expand scope. If the task is too large, complete the highest-value slice and clearly state what remains.
 
-When finished (or blocked), your final response must be exactly one fenced JSON block and nothing else. Do not include prose before or after it. Do not include planning/process narration such as "Let me research", "I'll check", or "Now I have comprehensive data".
+When finished or blocked, call the \`subagent_complete\` tool exactly once. Put the complete deliverable for the parent in its \`result\` field. The result may use normal Markdown and should include evidence, changed files, commands, or open questions only when relevant. Do not include planning or process narration.
 
-The JSON must contain the actual deliverable in result. Use evidence for file paths, URLs, commands, or quotes that support the result. Use empty arrays when none. If you lack enough evidence, say what is missing in result/open_questions and keep confidence below 0.5.
-
-Format:
-\`\`\`${FINAL_REPORT_FENCE}
-{"result":"actual answer/findings here","summary":"one-sentence summary","evidence":[{"source":"path/url/command","quote":"supporting quote or output","note":"why it matters"}],"changed_files":["path/file"],"commands":[{"command":"npm test","status":"pass"}],"open_questions":["..."],"confidence":0.0}
-\`\`\`
-Stop immediately after this block.`;
+If the completion tool is unavailable, return the complete deliverable as your final response instead.`;
 function readJsonFile(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
 
@@ -335,7 +304,11 @@ function formatSubagentPrompt(task: string, extraContext?: string): string {
     ? task
     : `Additional context:\n${extraContext.trim()}\n\nTask:\n${task}`;
 
-  return `${taskWithContext}\n\n${SUBAGENT_FINAL_REPORT_INSTRUCTIONS}`;
+  return `${taskWithContext}\n\n${SUBAGENT_COMPLETION_INSTRUCTIONS}`;
+}
+
+function isAgentFinished(agent: SubAgent): boolean {
+  return agent.status === "completed" || agent.status === "error";
 }
 
 function transitionAgentStatus(
@@ -425,7 +398,7 @@ function scheduleSubAgentTimeout(
 
     const timeoutText =
       `Time budget reached (${timeoutSeconds}s). ` +
-      "Do not continue expanding scope. Report what you completed, what remains, then finish now with the required final report block.";
+      "Do not continue expanding scope. Submit what you completed and what remains through subagent_complete now.";
     const result = notifySubAgent(agent.id, timeoutText);
     if (result.ok) {
       agent.timeoutNotified = true;
@@ -440,7 +413,7 @@ function scheduleSubAgentTimeout(
 
         notifySubAgent(
           agent.id,
-          "You are still running past the time budget. Stop now and send the required final report block immediately.",
+          "You are still running past the time budget. Stop now and call subagent_complete immediately with the best result available.",
         );
 
         sendCompletionMessage?.(
@@ -456,11 +429,67 @@ function scheduleSubAgentTimeout(
   }, timeoutSeconds * 1000);
 }
 
+function clearSubAgentShutdown(agent: SubAgent): void {
+  if (!agent.shutdownHandle) return;
+  clearTimeout(agent.shutdownHandle);
+  agent.shutdownHandle = undefined;
+}
+
+function recordActivity(agent: SubAgent, entry: string): void {
+  const compact = entry.trim().slice(0, MAX_ACTIVITY_ENTRY_CHARS);
+  if (!compact) return;
+
+  agent.activity.push(compact);
+  if (agent.activity.length > MAX_ACTIVITY_ENTRIES) {
+    agent.activity.splice(0, agent.activity.length - MAX_ACTIVITY_ENTRIES);
+  }
+}
+
+function requestProcessShutdown(agent: SubAgent): void {
+  clearSubAgentTimeout(agent);
+  if (agent.processExited || agent.shutdownHandle) return;
+
+  try {
+    if (agent.process.stdin && !agent.process.stdin.destroyed) {
+      agent.process.stdin.end();
+    }
+  } catch {}
+
+  agent.shutdownHandle = setTimeout(() => {
+    agent.shutdownHandle = undefined;
+    if (!agent.processExited) {
+      agent.process.kill();
+    }
+  }, PROCESS_SHUTDOWN_GRACE_MS);
+  agent.shutdownHandle.unref?.();
+}
+
 function removeAgentFromTracking(id: string): void {
   activeAgents.delete(id);
   watchedAgentIds.delete(id);
   updateSubAgentStatus();
   updateWatchWidget();
+}
+
+function getFailureMessage(agent: SubAgent): string {
+  if (agent.failureReason === "incomplete_result") {
+    return "The sub-agent response was truncated before completion.";
+  }
+  if (agent.failureReason === "assistant_error") {
+    return agent.lastAssistantError || "The sub-agent failed while responding.";
+  }
+  if (agent.failureReason === "process_error") {
+    return `The sub-agent process exited unexpectedly${agent.exitCode === undefined ? "." : ` with code ${agent.exitCode}.`}`;
+  }
+  return "The sub-agent did not return a usable result.";
+}
+
+function shouldSuggestNarrowerTask(agent: SubAgent): boolean {
+  return (
+    agent.failureReason === "missing_result" ||
+    agent.failureReason === "incomplete_result" ||
+    agent.failureReason === "assistant_error"
+  );
 }
 
 function notifyAgentCompletion(agent: SubAgent) {
@@ -475,30 +504,26 @@ function notifyAgentCompletion(agent: SubAgent) {
   const statusText = agent.status === "completed" ? "completed" : "errored";
   const exitText =
     agent.exitCode !== undefined ? ` | exit=${agent.exitCode}` : "";
-  const reportData = getAgentReportData(agent.id, DEFAULT_REPORT_COUNT);
-  const finalReport = reportData.finalReport;
-  const validation = reportData.finalReportValidation;
-  const resultText = finalReport?.result || "(no valid result captured)";
-  const validationText = validation.valid
-    ? "passed"
-    : `failed (${formatReportValidationProblems(validation)})`;
-  const evidenceText = finalReport?.evidence.length
-    ? finalReport.evidence
-        .map((item) => {
-          const details = [item.quote, item.note].filter(Boolean).join(" — ");
-          return `- ${item.source}${details ? `: ${details}` : ""}`;
-        })
-        .join("\n")
-    : "(none)";
+  const resultText = agent.completionResult?.trim();
+  const partialResult = agent.partialResult?.trim();
+  const resultBlock = resultText
+    ? `\nresult:\n${resultText}`
+    : partialResult
+      ? `\npartial result:\n${partialResult}`
+      : "";
+  const failureBlock =
+    agent.status === "error"
+      ? `\nreason: ${getFailureMessage(agent)}` +
+        (shouldSuggestNarrowerTask(agent)
+          ? "\nSuggestion: If retrying, use a simpler or more narrowly scoped task."
+          : "")
+      : "";
 
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
       ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}` +
-      `\nreport validation: ${validationText}` +
-      `\nreport completeness: ${reportData.confidenceRating.score}/${reportData.confidenceRating.maxScore}` +
-      `\nsummary: ${finalReport?.summary || "(missing structured final report block)"}` +
-      `\nresult:\n\`\`\`text\n${resultText}\n\`\`\`` +
-      `\nevidence:\n${evidenceText}`,
+      failureBlock +
+      resultBlock,
     {
       agentId: agent.id,
       status: agent.status,
@@ -509,15 +534,183 @@ function notifyAgentCompletion(agent: SubAgent) {
       exitCode: agent.exitCode,
       timedOut: !!agent.timeoutNotified,
       timeoutSeconds: agent.timeoutSeconds,
-      finalReportText: resultText,
-      finalReport: reportData.finalReport,
-      finalReportValidation: validation,
-      confidenceRating: reportData.confidenceRating,
-      reviewChecklist: reportData.reviewChecklist,
+      result: resultText,
+      partialResult,
+      failureReason: agent.failureReason,
+      finalReportText: resultText || partialResult || "",
     },
   );
   agent.completionNotified = true;
+  requestProcessShutdown(agent);
   removeAgentFromTracking(agent.id);
+}
+
+function settleSubAgent(agent: SubAgent, completionAction: string): void {
+  if (agent.status === "completed" || agent.status === "error") return;
+
+  const toolResult = agent.completionResult?.trim();
+  if (toolResult) {
+    agent.completionResult = toolResult;
+    transitionAgentStatus(agent, "completed", completionAction);
+    notifyAgentCompletion(agent);
+    return;
+  }
+
+  const fallbackResult = agent.lastAssistantText?.trim();
+  const stopReason = agent.lastAssistantStopReason;
+  if (fallbackResult && (!stopReason || stopReason === "stop")) {
+    agent.completionResult = fallbackResult;
+    transitionAgentStatus(
+      agent,
+      "completed",
+      `${completionAction} (text fallback)`,
+    );
+    notifyAgentCompletion(agent);
+    return;
+  }
+
+  if (fallbackResult) {
+    agent.partialResult = fallbackResult;
+  }
+
+  if (stopReason === "length") {
+    agent.failureReason = "incomplete_result";
+  } else if (stopReason === "error" || stopReason === "aborted") {
+    agent.failureReason = "assistant_error";
+  } else {
+    agent.failureReason = "missing_result";
+  }
+
+  transitionAgentStatus(agent, "error", getFailureMessage(agent));
+  notifyAgentCompletion(agent);
+}
+
+function extractAssistantMessageText(message: unknown): string {
+  if (!message || typeof message !== "object") return "";
+  const candidate = message as Record<string, unknown>;
+  if (candidate.role !== "assistant" || !Array.isArray(candidate.content)) {
+    return "";
+  }
+
+  return candidate.content
+    .filter(
+      (item): item is { type: string; text: string } =>
+        !!item &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "text" &&
+        typeof (item as Record<string, unknown>).text === "string",
+    )
+    .map((item) => item.text)
+    .join("")
+    .trim();
+}
+
+function handleSubAgentEvent(
+  agent: SubAgent,
+  event: Record<string, any>,
+): void {
+  agent.receivedEvent = true;
+  agent.lastActivity = Date.now();
+
+  if (event.type === "agent_start") {
+    transitionAgentStatus(agent, "running", "started");
+    return;
+  }
+
+  if (event.type === "message_start" && event.message?.role === "assistant") {
+    agent.currentResponsePreview = "";
+    return;
+  }
+
+  if (event.type === "message_update" && event.assistantMessageEvent) {
+    const delta = event.assistantMessageEvent;
+    if (delta.type === "text_delta") {
+      const deltaText = typeof delta.delta === "string" ? delta.delta : "";
+      updateProgressFromTextDelta(agent, deltaText);
+      agent.currentResponsePreview =
+        `${agent.currentResponsePreview}${deltaText}`.slice(
+          -MAX_RESPONSE_PREVIEW_CHARS,
+        );
+      if (!agent.currentTool && agent.progressPercent === undefined) {
+        agent.lastAction = "💬 responding";
+      }
+    }
+    return;
+  }
+
+  if (event.type === "message_end" && event.message?.role === "assistant") {
+    const text = extractAssistantMessageText(event.message);
+    agent.lastAssistantText = text || undefined;
+    agent.lastAssistantStopReason =
+      typeof event.message.stopReason === "string"
+        ? event.message.stopReason
+        : undefined;
+    agent.lastAssistantError =
+      typeof event.message.errorMessage === "string"
+        ? event.message.errorMessage.trim()
+        : undefined;
+    if (text) recordActivity(agent, `💬 ${text}`);
+    agent.currentResponsePreview = "";
+    return;
+  }
+
+  if (event.type === "tool_execution_start") {
+    const toolName =
+      typeof event.toolName === "string" ? event.toolName : "unknown";
+    agent.currentTool = `${toolName}(${JSON.stringify(event.args).slice(0, 50)}...)`;
+    agent.lastAction = `🔧 ${toolName}`;
+
+    if (toolName === "subagent_complete") {
+      const result =
+        event.args && typeof event.args.result === "string"
+          ? event.args.result.trim()
+          : "";
+      if (result) agent.completionResult = result;
+      recordActivity(agent, "🏁 Completion submitted");
+    } else {
+      recordActivity(
+        agent,
+        `🔧 ${toolName}: ${JSON.stringify(event.args).slice(0, 100)}`,
+      );
+    }
+    return;
+  }
+
+  if (event.type === "tool_execution_end") {
+    const toolName =
+      typeof event.toolName === "string" ? event.toolName : undefined;
+    agent.currentTool = undefined;
+    agent.lastAction = toolName ? `✅ ${toolName}` : "tool finished";
+    return;
+  }
+
+  if (event.type === "agent_end") {
+    agent.currentTool = undefined;
+    agent.lastAction = event.willRetry
+      ? "automatic retry pending"
+      : "finishing";
+    return;
+  }
+
+  if (event.type === "agent_settled") {
+    settleSubAgent(agent, "finished");
+    return;
+  }
+
+  if (event.type === "auto_retry_start") {
+    agent.lastAction = `retrying (${event.attempt ?? "?"}/${event.maxAttempts ?? "?"})`;
+    recordActivity(agent, `↻ ${agent.lastAction}`);
+    return;
+  }
+
+  if (event.type === "response") {
+    const command =
+      typeof event.command === "string" ? event.command : "unknown";
+    recordActivity(
+      agent,
+      `${event.success === true ? "✅" : "❌"} RPC response (${command})${event.success === true ? "" : " failed"}`,
+    );
+  }
 }
 
 function spawnSubAgent(
@@ -531,7 +724,10 @@ function spawnSubAgent(
 
   const args = ["--mode", "rpc", "--no-session", "--model", model];
 
-  const childEnv: NodeJS.ProcessEnv = { ...process.env };
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    PI_SUBAGENT_CHILD: "1",
+  };
   if (!allowNestedSubagents) {
     childEnv.PI_SUBAGENT_DISABLE_RECURSION = "1";
   }
@@ -540,11 +736,6 @@ function spawnSubAgent(
     stdio: ["pipe", "pipe", "pipe"],
     detached: false,
     env: childEnv,
-  });
-
-  // Handle spawn errors
-  proc.on("error", (err) => {
-    console.error(`Failed to spawn sub-agent ${id}:`, err);
   });
 
   const agent: SubAgent = {
@@ -556,13 +747,21 @@ function spawnSubAgent(
     model,
     extraContext,
     status: "starting",
-    output: [],
+    activity: [],
+    currentResponsePreview: "",
     startTime: Date.now(),
     lastAction: "starting",
     lastActivity: Date.now(),
     receivedEvent: false,
-    finalReportAttempts: 0,
   };
+
+  proc.on("error", (error) => {
+    console.error(`Failed to spawn sub-agent ${id}:`, error);
+    agent.failureReason = "process_error";
+    agent.lastAssistantError = error.message;
+    transitionAgentStatus(agent, "error", error.message);
+    notifyAgentCompletion(agent);
+  });
 
   // Handle stdout (JSON events)
   let buffer = "";
@@ -573,51 +772,11 @@ function spawnSubAgent(
 
     for (const line of lines) {
       if (!line.trim()) continue;
-      agent.output.push(line);
-      agent.lastActivity = Date.now();
 
       try {
-        const event = JSON.parse(line);
-        agent.receivedEvent = true;
-
-        // Track what the sub-agent is currently doing
-        if (event.type === "tool_execution_start") {
-          agent.currentTool = `${event.toolName}(${JSON.stringify(event.args).slice(0, 50)}...)`;
-          agent.lastAction = `🔧 ${event.toolName}`;
-        } else if (event.type === "tool_execution_end") {
-          agent.currentTool = undefined;
-          agent.lastAction = event.toolName
-            ? `✅ ${event.toolName}`
-            : "tool finished";
-        } else if (
-          event.type === "message_update" &&
-          event.assistantMessageEvent
-        ) {
-          const delta = event.assistantMessageEvent;
-          if (delta.type === "text_delta") {
-            updateProgressFromTextDelta(agent, delta.delta || "");
-            if (!agent.currentTool && agent.progressPercent === undefined) {
-              agent.lastAction = "💬 responding";
-            }
-          }
-        } else if (event.type === "agent_end") {
-          agent.currentTool = undefined;
-        }
-
-        // Update status
-        if (event.type === "agent_start") {
-          transitionAgentStatus(agent, "running", "started");
-        } else if (event.type === "agent_end") {
-          handleAgentCompletionCandidate(agent, "finished", true);
-          // Force immediate widget update on completion or retry
-          updateSubAgentStatus();
-          // Update watch widget if being watched
-          if (watchedAgentIds.has(id)) {
-            updateWatchWidget();
-          }
-        }
-      } catch (e) {
-        // Ignore parse errors
+        handleSubAgentEvent(agent, JSON.parse(line));
+      } catch {
+        recordActivity(agent, `📄 Unparseable RPC output: ${line}`);
       }
     }
 
@@ -633,31 +792,42 @@ function spawnSubAgent(
   // Handle stderr
   proc.stderr?.on("data", (data: Buffer) => {
     const stderrText = data.toString().trim();
-    agent.output.push(`[stderr]: ${stderrText}`);
     if (stderrText) {
+      recordActivity(agent, `stderr: ${stderrText}`);
       agent.lastAction = `stderr: ${stderrText.slice(0, 60)}`;
     }
     agent.lastActivity = Date.now();
   });
 
-  // Handle process exit
-  proc.on("exit", (code) => {
+  proc.on("exit", (code, signal) => {
     clearSubAgentTimeout(agent);
+    clearSubAgentShutdown(agent);
+    agent.processExited = true;
     agent.exitCode = code ?? undefined;
-    if (code !== 0 && agent.status !== "completed") {
-      transitionAgentStatus(
-        agent,
-        "error",
-        `exited with code ${code ?? "unknown"}`,
-      );
-      notifyAgentCompletion(agent);
-    } else if (agent.status !== "completed" && agent.status !== "error") {
-      handleAgentCompletionCandidate(agent, "process exited", false);
+
+    if (!isAgentFinished(agent)) {
+      if (
+        agent.completionResult ||
+        agent.lastAssistantText ||
+        (code === 0 && !signal)
+      ) {
+        settleSubAgent(agent, "process exited");
+      }
+
+      if (!isAgentFinished(agent)) {
+        agent.failureReason = "process_error";
+        transitionAgentStatus(
+          agent,
+          "error",
+          `process exited${signal ? ` from ${signal}` : ` with code ${code ?? "unknown"}`}`,
+        );
+        notifyAgentCompletion(agent);
+      }
     } else {
       notifyAgentCompletion(agent);
     }
+
     updateSubAgentStatus();
-    // Update watch widget if being watched
     if (watchedAgentIds.has(id)) {
       updateWatchWidget();
     }
@@ -825,504 +995,10 @@ function buildTranscriptLines(
   agent: SubAgent,
   maxLines: number = 10,
 ): string[] {
-  const transcript: string[] = [];
-  let currentMessage = "";
-
-  for (const line of agent.output) {
-    try {
-      const event = JSON.parse(line);
-
-      if (event.type === "tool_execution_start") {
-        // Flush any pending message first
-        if (currentMessage.trim()) {
-          transcript.push(`💬 ${currentMessage.trim()}`);
-          currentMessage = "";
-        }
-        transcript.push(
-          `🔧 ${event.toolName}: ${JSON.stringify(event.args).slice(0, 100)}`,
-        );
-      } else if (event.type === "parent_notify") {
-        if (currentMessage.trim()) {
-          transcript.push(`💬 ${currentMessage.trim()}`);
-          currentMessage = "";
-        }
-        const notifyText =
-          typeof event.text === "string" ? event.text : "(no text)";
-        transcript.push(`📨 Parent notify: ${notifyText}`);
-      } else if (event.type === "response") {
-        if (currentMessage.trim()) {
-          transcript.push(`💬 ${currentMessage.trim()}`);
-          currentMessage = "";
-        }
-
-        const command =
-          typeof event.command === "string" ? event.command : "(unknown)";
-        const success = event.success === true;
-        transcript.push(
-          `${success ? "✅" : "❌"} RPC response (${command})${success ? "" : " failed"}`,
-        );
-      } else if (
-        event.type === "message_update" &&
-        event.assistantMessageEvent
-      ) {
-        const delta = event.assistantMessageEvent;
-        if (delta.type === "text_delta") {
-          currentMessage += delta.delta;
-        } else if (delta.type === "toolcall_start") {
-          if (currentMessage.trim()) {
-            transcript.push(`💬 ${currentMessage.trim()}`);
-            currentMessage = "";
-          }
-        }
-      }
-    } catch {}
-  }
-
-  // Don't include incomplete message - it will be added on next update
-
-  // Return last N lines
-  return transcript.slice(-maxLines);
-}
-
-function normalizeReportCount(rawCount: number | undefined): number {
-  if (rawCount === undefined) return DEFAULT_REPORT_COUNT;
-  if (!Number.isFinite(rawCount)) return DEFAULT_REPORT_COUNT;
-
-  const count = Math.trunc(rawCount);
-  if (count < 1) return DEFAULT_REPORT_COUNT;
-  return Math.min(count, MAX_REPORT_COUNT);
-}
-
-function parseReportCountFromArg(rawCount: string | undefined): {
-  count: number;
-  error?: string;
-} {
-  if (!rawCount) return { count: DEFAULT_REPORT_COUNT };
-
-  const parsed = Number.parseInt(rawCount, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return {
-      count: DEFAULT_REPORT_COUNT,
-      error: "Count must be a positive integer",
-    };
-  }
-
-  return { count: Math.min(parsed, MAX_REPORT_COUNT) };
-}
-
-function buildReportEntries(agent: SubAgent): string[] {
-  const entries: string[] = [];
-  let currentMessage = "";
-
-  for (const line of agent.output) {
-    try {
-      const event = JSON.parse(line);
-
-      if (event.type === "tool_execution_start") {
-        if (currentMessage.trim()) {
-          entries.push(`💬 ${currentMessage.trim()}`);
-          currentMessage = "";
-        }
-
-        entries.push(
-          `🔧 ${event.toolName}: ${JSON.stringify(event.args).slice(0, 100)}`,
-        );
-      } else if (event.type === "parent_notify") {
-        if (currentMessage.trim()) {
-          entries.push(`💬 ${currentMessage.trim()}`);
-          currentMessage = "";
-        }
-
-        const notifyText =
-          typeof event.text === "string" ? event.text : "(no text)";
-        entries.push(`📨 Parent notify: ${notifyText}`);
-      } else if (event.type === "response") {
-        if (currentMessage.trim()) {
-          entries.push(`💬 ${currentMessage.trim()}`);
-          currentMessage = "";
-        }
-
-        const command =
-          typeof event.command === "string" ? event.command : "(unknown)";
-        const success = event.success === true;
-        entries.push(
-          `${success ? "✅" : "❌"} RPC response (${command})${success ? "" : " failed"}`,
-        );
-      } else if (
-        event.type === "message_update" &&
-        event.assistantMessageEvent
-      ) {
-        const delta = event.assistantMessageEvent;
-        if (delta.type === "text_delta") {
-          currentMessage += delta.delta;
-        } else if (delta.type === "toolcall_start") {
-          if (currentMessage.trim()) {
-            entries.push(`💬 ${currentMessage.trim()}`);
-            currentMessage = "";
-          }
-        }
-      }
-    } catch {}
-  }
-
-  if (currentMessage.trim()) {
-    entries.push(`💬 ${currentMessage.trim()}`);
-  }
-
-  if (entries.length === 0 && agent.output.length > 0) {
-    const fallbackLines = agent.output
-      .slice(-8)
-      .map(
-        (line) => `📄 ${line.slice(0, 200)}${line.length > 200 ? "..." : ""}`,
-      );
-    entries.push(...fallbackLines);
-  }
-
-  return entries;
-}
-
-function extractAssistantText(agent: SubAgent): string {
-  let text = "";
-
-  for (const line of agent.output) {
-    try {
-      const event = JSON.parse(line);
-      if (
-        event.type === "message_update" &&
-        event.assistantMessageEvent?.type === "text_delta"
-      ) {
-        text += event.assistantMessageEvent.delta || "";
-      }
-    } catch {}
-  }
-
-  return text;
-}
-
-function normalizeParsedFinalReport(parsed: Partial<FinalReport>): FinalReport {
-  return {
-    result: typeof parsed.result === "string" ? parsed.result.trim() : "",
-    summary: typeof parsed.summary === "string" ? parsed.summary.trim() : "",
-    evidence: Array.isArray(parsed.evidence)
-      ? parsed.evidence
-          .map((value) => {
-            if (!value || typeof value !== "object") return null;
-            const candidate = value as Record<string, unknown>;
-            const source =
-              typeof candidate.source === "string"
-                ? candidate.source.trim()
-                : "";
-            const quote =
-              typeof candidate.quote === "string"
-                ? candidate.quote.trim()
-                : undefined;
-            const note =
-              typeof candidate.note === "string"
-                ? candidate.note.trim()
-                : undefined;
-            if (!source) return null;
-            return {
-              source,
-              ...(quote ? { quote } : {}),
-              ...(note ? { note } : {}),
-            };
-          })
-          .filter((value): value is EvidenceItem => !!value)
-      : [],
-    changed_files: Array.isArray(parsed.changed_files)
-      ? parsed.changed_files
-          .filter((value): value is string => typeof value === "string")
-          .map((value) => value.trim())
-          .filter(Boolean)
-      : [],
-    commands: Array.isArray(parsed.commands)
-      ? parsed.commands
-          .map((value) => {
-            if (!value || typeof value !== "object") return null;
-            const candidate = value as Record<string, unknown>;
-            const command =
-              typeof candidate.command === "string"
-                ? candidate.command.trim()
-                : "";
-            const rawStatus =
-              typeof candidate.status === "string"
-                ? candidate.status.toLowerCase()
-                : "unknown";
-            const status: CommandValidation["status"] =
-              rawStatus === "pass" || rawStatus === "fail"
-                ? rawStatus
-                : "unknown";
-            if (!command) return null;
-            return { command, status };
-          })
-          .filter((value): value is CommandValidation => !!value)
-      : [],
-    open_questions: Array.isArray(parsed.open_questions)
-      ? parsed.open_questions
-          .filter((value): value is string => typeof value === "string")
-          .map((value) => value.trim())
-          .filter(Boolean)
-      : [],
-    confidence:
-      typeof parsed.confidence === "number" &&
-      Number.isFinite(parsed.confidence)
-        ? Math.max(0, Math.min(1, parsed.confidence))
-        : null,
-  };
-}
-
-function extractFinalReportJsonBlock(text: string): string | null {
-  const fencedRegex = new RegExp(
-    "```" + FINAL_REPORT_FENCE + "\\s*([\\s\\S]*?)```",
-    "gi",
-  );
-  const fencedMatches = Array.from(text.matchAll(fencedRegex));
-  for (let index = fencedMatches.length - 1; index >= 0; index--) {
-    const rawJson = fencedMatches[index]?.[1]?.trim();
-    if (rawJson) return rawJson;
-  }
-
-  const marker = FINAL_REPORT_FENCE;
-  const markerIndex = text.toLowerCase().lastIndexOf(marker.toLowerCase());
-  if (markerIndex === -1) return null;
-
-  const afterMarker = text.slice(markerIndex);
-  const openBraceIndex = afterMarker.indexOf("{");
-  const closeBraceIndex = afterMarker.lastIndexOf("}");
-  if (
-    openBraceIndex === -1 ||
-    closeBraceIndex === -1 ||
-    closeBraceIndex <= openBraceIndex
-  ) {
-    return null;
-  }
-
-  return afterMarker.slice(openBraceIndex, closeBraceIndex + 1).trim();
-}
-
-function parseFinalReportFromTexts(texts: string[]): FinalReport | null {
-  const candidateTexts = texts.filter((value) => value.trim().length > 0);
-
-  for (const text of candidateTexts) {
-    const rawJson = extractFinalReportJsonBlock(text);
-    if (!rawJson) continue;
-
-    try {
-      const parsed = JSON.parse(rawJson) as Partial<FinalReport>;
-      return normalizeParsedFinalReport(parsed);
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
-}
-
-function parseFinalReport(agent: SubAgent): FinalReport | null {
-  return parseFinalReportFromTexts([extractAssistantText(agent)]);
-}
-
-function removeFinalReportBlock(text: string): string {
-  const fenced = new RegExp(
-    "```" + FINAL_REPORT_FENCE + "\\s*[\\s\\S]*?```",
-    "gi",
-  );
-  return text.replace(fenced, "").trim();
-}
-
-function looksLikeProcessNarration(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
-
-  const processPhraseCount =
-    trimmed.match(
-      /\b(?:let me|i'll|i will|i should|i'm going to|now i have|let's)\b/gi,
-    )?.length ?? 0;
-
-  return processPhraseCount >= 3;
-}
-
-function hasSupportingEvidence(finalReport: FinalReport): boolean {
-  return (
-    finalReport.evidence.length > 0 ||
-    finalReport.changed_files.length > 0 ||
-    finalReport.commands.length > 0
-  );
-}
-
-function validateFinalReport(
-  finalReport: FinalReport | null,
-  assistantText: string,
-): ReportValidation {
-  const issues: string[] = [];
-  const warnings: string[] = [];
-
-  if (!finalReport) {
-    return {
-      valid: false,
-      issues: ["missing_final_report_block"],
-      warnings,
-    };
-  }
-
-  if (!finalReport.result) issues.push("missing_result");
-  if (!finalReport.summary) issues.push("missing_summary");
-  if (finalReport.confidence === null) issues.push("missing_confidence");
-
-  if (finalReport.result && looksLikeProcessNarration(finalReport.result)) {
-    issues.push("result_looks_like_process_log");
-  }
-
-  if (!hasSupportingEvidence(finalReport)) {
-    if (finalReport.confidence !== null && finalReport.confidence >= 0.5) {
-      issues.push("missing_supporting_evidence");
-    } else {
-      warnings.push("no_supporting_evidence");
-    }
-  }
-
-  const extraAssistantText = removeFinalReportBlock(assistantText);
-  if (extraAssistantText) {
-    warnings.push("extraneous_text_outside_final_report_block");
-  }
-
-  return {
-    valid: issues.length === 0,
-    issues,
-    warnings,
-  };
-}
-
-function getCurrentFinalReportValidation(agent: SubAgent): {
-  assistantText: string;
-  finalReport: FinalReport | null;
-  validation: ReportValidation;
-} {
-  const assistantText = extractAssistantText(agent);
-  const finalReport = parseFinalReport(agent);
-  const validation = validateFinalReport(finalReport, assistantText);
-  return { assistantText, finalReport, validation };
-}
-
-function formatReportValidationProblems(validation: ReportValidation): string {
-  const problems = [
-    ...validation.issues.map((issue) => `issue:${issue}`),
-    ...validation.warnings.map((warning) => `warning:${warning}`),
-  ];
-  return problems.length > 0 ? problems.join(", ") : "none";
-}
-
-function buildFinalReportRetryPrompt(validation: ReportValidation): string {
-  return (
-    "Your previous final report failed validation. Do not do more research or expand scope unless required to fill missing report fields. Rewrite the final response now.\n\n" +
-    `Validation problems: ${formatReportValidationProblems(validation)}\n\n` +
-    "Return exactly one fenced JSON block and nothing else. Put the actual deliverable in `result`. Do not include planning/process narration such as `Let me...` or `I'll check...`.\n\n" +
-    `\`\`\`${FINAL_REPORT_FENCE}\n` +
-    '{"result":"actual answer/findings here","summary":"one-sentence summary","evidence":[{"source":"path/url/command","quote":"supporting quote or output","note":"why it matters"}],"changed_files":[],"commands":[],"open_questions":[],"confidence":0.0}\n' +
-    "```"
-  );
-}
-
-function requestFinalReportRewrite(
-  agent: SubAgent,
-  validation: ReportValidation,
-): boolean {
-  if (!agent.process.stdin || agent.process.stdin.destroyed) return false;
-
-  const message = buildFinalReportRetryPrompt(validation);
-  const prompt = JSON.stringify({ type: "prompt", message });
-  agent.process.stdin.write(prompt + "\n");
-  agent.output.push(
-    JSON.stringify({
-      type: "parent_notify",
-      mode: "final_report_retry",
-      text: message,
-      timestamp: Date.now(),
-    }),
-  );
-  agent.currentTool = undefined;
-  agent.lastAction = `retrying final report (${agent.finalReportAttempts}/${MAX_FINAL_REPORT_ATTEMPTS})`;
-  agent.lastActivity = Date.now();
-  updateSubAgentStatus();
-  if (watchedAgentIds.has(agent.id)) {
-    updateWatchWidget();
-  }
-
-  return true;
-}
-
-function handleAgentCompletionCandidate(
-  agent: SubAgent,
-  completionAction: string,
-  allowRetry: boolean,
-): void {
-  const { validation } = getCurrentFinalReportValidation(agent);
-  agent.finalReportAttempts += 1;
-  agent.finalReportValidation = validation;
-
-  if (validation.valid) {
-    transitionAgentStatus(agent, "completed", completionAction);
-    notifyAgentCompletion(agent);
-    return;
-  }
-
-  if (
-    allowRetry &&
-    agent.finalReportAttempts < MAX_FINAL_REPORT_ATTEMPTS &&
-    requestFinalReportRewrite(agent, validation)
-  ) {
-    return;
-  }
-
-  const reason = formatReportValidationProblems(validation);
-  transitionAgentStatus(agent, "error", `invalid final report: ${reason}`);
-  notifyAgentCompletion(agent);
-}
-
-function buildConfidenceRating(
-  finalReport: FinalReport | null,
-  entries: string[],
-): ConfidenceRating {
-  const missing: string[] = [];
-  const warnings: string[] = [];
-
-  if (!finalReport) {
-    missing.push("final_report_block");
-    return { score: 0, maxScore: 5, missing, warnings };
-  }
-
-  let score = 1;
-  if (!finalReport.result) missing.push("result");
-  else score++;
-
-  if (!finalReport.summary) missing.push("summary");
-  else score++;
-
-  if (!hasSupportingEvidence(finalReport))
-    warnings.push("no_supporting_evidence");
-  else score++;
-
-  if (finalReport.confidence === null) missing.push("confidence");
-  else score++;
-
-  if (!entries.some((entry) => entry.startsWith("🔧"))) {
-    warnings.push("no_tool_activity_logged");
-  }
-
-  return { score, maxScore: 5, missing, warnings };
-}
-
-function buildReviewChecklist(finalReport: FinalReport | null): string[] {
-  if (!finalReport) {
-    return ["[ ] Missing structured final report"];
-  }
-
-  return [
-    `[ ] Review files touched (${finalReport.changed_files.length})`,
-    `[ ] Validate commands (${finalReport.commands.length})`,
-    `[ ] Check risks/open questions (${finalReport.open_questions.length})`,
-    "[ ] Confirm tests/doc updates if expected",
-  ];
+  const entries = [...agent.activity];
+  const preview = agent.currentResponsePreview.trim();
+  if (preview) entries.push(`💬 ${preview}`);
+  return entries.slice(-maxLines);
 }
 
 function scheduleWatchWidgetUpdate(force = false) {
@@ -1442,115 +1118,6 @@ function updateWatchWidget() {
   currentCtx.ui.setWidget("subagent-watch", widgetLines);
 }
 
-function getAgentReportData(
-  id: string,
-  requestedCount?: number,
-): {
-  found: boolean;
-  agentId: string;
-  status?: SubAgent["status"];
-  done?: boolean;
-  diagnostics: string[];
-  recentEntries: string[];
-  count: number;
-  finalReport: FinalReport | null;
-  finalReportValidation: ReportValidation;
-  confidenceRating: ConfidenceRating;
-  reviewChecklist: string[];
-} {
-  const agent = activeAgents.get(id);
-  const count = normalizeReportCount(requestedCount);
-
-  if (!agent) {
-    return {
-      found: false,
-      agentId: id,
-      diagnostics: [],
-      recentEntries: [],
-      count,
-      finalReport: null,
-      finalReportValidation: {
-        valid: false,
-        issues: ["agent_not_found"],
-        warnings: [],
-      },
-      confidenceRating: { score: 0, maxScore: 5, missing: [], warnings: [] },
-      reviewChecklist: [],
-    };
-  }
-
-  const noResponseEver =
-    !agent.receivedEvent &&
-    (agent.status === "completed" || agent.status === "error");
-
-  const noResponseYet =
-    !agent.receivedEvent &&
-    (agent.status === "starting" || agent.status === "running");
-
-  const diagnostics: string[] = [];
-
-  if (noResponseYet) {
-    diagnostics.push(
-      "⚠ No response from the sub-agent process yet. The process may still be starting or blocked.",
-    );
-  }
-
-  if (noResponseEver) {
-    diagnostics.push(
-      "⚠ The sub-agent process exited without emitting any events. This often indicates startup or model-resolution failures.",
-    );
-  }
-
-  const entries = buildReportEntries(agent);
-  const recentEntries = entries.slice(-count);
-  const { finalReport, validation } = getCurrentFinalReportValidation(agent);
-  const confidenceRating = buildConfidenceRating(finalReport, entries);
-  const reviewChecklist = buildReviewChecklist(finalReport);
-
-  return {
-    found: true,
-    agentId: id,
-    status: agent.status,
-    done: agent.status === "completed" || agent.status === "error",
-    diagnostics,
-    recentEntries,
-    count,
-    finalReport,
-    finalReportValidation: validation,
-    confidenceRating,
-    reviewChecklist,
-  };
-}
-
-function getAgentReport(id: string, requestedCount?: number): string {
-  const report = getAgentReportData(id, requestedCount);
-  if (!report.found) return `Agent ${id} not found`;
-
-  const diagnosticsBlock =
-    report.diagnostics.length > 0
-      ? `${report.diagnostics.join("\n\n")}\n\n`
-      : "";
-
-  const finalBlock = report.finalReport
-    ? [
-        "## Final deliverable",
-        `validation: ${report.finalReportValidation.valid ? "passed" : `failed (${formatReportValidationProblems(report.finalReportValidation)})`}`,
-        `result: ${report.finalReport.result || "(empty)"}`,
-        `summary: ${report.finalReport.summary || "(empty)"}`,
-        `evidence: ${report.finalReport.evidence.map((item) => item.source).join(", ") || "(none)"}`,
-        `changed_files: ${report.finalReport.changed_files.join(", ") || "(none)"}`,
-        `commands: ${report.finalReport.commands.map((c) => `${c.command}=${c.status}`).join(", ") || "(none)"}`,
-        `open_questions: ${report.finalReport.open_questions.join(" | ") || "(none)"}`,
-        `confidence: ${report.finalReport.confidence ?? "(missing)"}`,
-      ].join("\n")
-    : `## Final deliverable\n(missing structured final report block)\nvalidation: failed (${formatReportValidationProblems(report.finalReportValidation)})`;
-
-  const confidenceBlock = `report completeness: ${report.confidenceRating.score}/${report.confidenceRating.maxScore}`;
-  const checklistBlock = `checklist:\n${report.reviewChecklist.map((item) => `- ${item}`).join("\n")}`;
-
-  return `${finalBlock}\n\n${confidenceBlock}\n${checklistBlock}\n\n## Recent activity (last ${report.count})\n\n${diagnosticsBlock}${report.recentEntries.join("\n\n") || "(no activity yet)"}`;
-}
-
 function killSubAgent(id: string): {
   ok: boolean;
   reason?: "not_found" | "already_finished";
@@ -1565,6 +1132,7 @@ function killSubAgent(id: string): {
   }
 
   clearSubAgentTimeout(agent);
+  clearSubAgentShutdown(agent);
   agent.process.kill();
   removeAgentFromTracking(id);
   return { ok: true };
@@ -1607,15 +1175,7 @@ function notifySubAgent(
   });
 
   agent.process.stdin.write(steer + "\n");
-  agent.output.push(
-    JSON.stringify({
-      type: "parent_notify",
-      mode: "steer",
-      requestId,
-      text: trimmed,
-      timestamp: Date.now(),
-    }),
-  );
+  recordActivity(agent, `📨 Parent guidance: ${trimmed}`);
   agent.lastAction = "📨 steer sent";
   agent.lastActivity = Date.now();
   updateSubAgentStatus();
@@ -1675,6 +1235,56 @@ type SubagentSpawnedDetails = {
 };
 
 export default function (pi: ExtensionAPI) {
+  if (isTruthyEnv(process.env.PI_SUBAGENT_CHILD)) {
+    pi.registerTool({
+      name: "subagent_complete",
+      label: "Complete Sub-Agent Task",
+      description:
+        "Submit the complete final deliverable to the parent and finish this child sub-agent. " +
+        "Call this exactly once when the task is complete or blocked.",
+      parameters: {
+        type: "object",
+        properties: {
+          result: {
+            type: "string",
+            description:
+              "Complete answer or deliverable for the parent, using Markdown when useful",
+          },
+        },
+        required: ["result"],
+      } as any,
+      async execute(
+        toolCallId,
+        params: { result: string },
+        signal,
+        onUpdate,
+        ctx,
+      ) {
+        const result =
+          typeof params.result === "string" ? params.result.trim() : "";
+        if (!result) {
+          throw new Error("A non-empty result is required before completing.");
+        }
+
+        ctx.shutdown();
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Result submitted. The child sub-agent will now exit.",
+            },
+          ],
+          details: { completed: true },
+          terminate: true,
+        };
+      },
+    });
+  }
+
+  if (isTruthyEnv(process.env.PI_SUBAGENT_DISABLE_RECURSION)) {
+    return;
+  }
+
   sendCompletionMessage = (
     content: string,
     details?: Record<string, unknown>,
@@ -1733,10 +1343,6 @@ export default function (pi: ExtensionAPI) {
       return renderSubagentMessage(message.content, expanded, collapsed, theme);
     },
   );
-
-  if (isTruthyEnv(process.env.PI_SUBAGENT_DISABLE_RECURSION)) {
-    return;
-  }
 
   // Register /subagent command
   pi.registerCommand("subagent", {
@@ -2558,8 +2164,9 @@ export default function (pi: ExtensionAPI) {
 
   // Clean up on shutdown
   pi.on("session_shutdown", async () => {
-    for (const [id, agent] of activeAgents) {
+    for (const [, agent] of activeAgents) {
       clearSubAgentTimeout(agent);
+      clearSubAgentShutdown(agent);
       agent.process.kill();
     }
     activeAgents.clear();
@@ -2577,8 +2184,9 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_before_switch", async (event) => {
     if (event.reason === "new") {
       // Kill any remaining processes and clear the list
-      for (const [id, agent] of activeAgents) {
+      for (const [, agent] of activeAgents) {
         clearSubAgentTimeout(agent);
+        clearSubAgentShutdown(agent);
         agent.process.kill();
       }
       activeAgents.clear();
@@ -2595,6 +2203,7 @@ export const __test = {
   resetState() {
     for (const [, agent] of activeAgents) {
       clearSubAgentTimeout(agent);
+      clearSubAgentShutdown(agent);
     }
     activeAgents.clear();
     watchedAgentIds.clear();
@@ -2609,11 +2218,10 @@ export const __test = {
     lastWatchWidgetUpdateAt = 0;
   },
 
-  parseFinalReportFromTexts,
-  buildConfidenceRating,
-  validateFinalReport,
-  handleAgentCompletionCandidate,
-  getAgentReportData,
+  extractAssistantMessageText,
+  handleSubAgentEvent,
+  settleSubAgent,
+  recordActivity,
 
   setDefaultTimeoutSeconds(seconds: number | undefined) {
     defaultTimeoutSeconds = seconds;
@@ -2638,6 +2246,7 @@ export const __test = {
       stdin: {
         destroyed: false,
         write: noop,
+        end: noop,
       },
     } as unknown as ChildProcess;
 
@@ -2647,11 +2256,11 @@ export const __test = {
       task: "test task",
       taskTitle: "test task",
       status: "running",
-      output: [],
+      activity: [],
+      currentResponsePreview: "",
       startTime: Date.now(),
       lastActivity: Date.now(),
       receivedEvent: true,
-      finalReportAttempts: 0,
       ...overrides,
     };
 
