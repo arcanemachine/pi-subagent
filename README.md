@@ -131,8 +131,6 @@ Use `/subagent show` to watch sub-agents in a live-updating widget above the edi
 Task: analyze codebase...
 🔧 bash({"command":"ls -la"})
 ────────────────────────────────────────
-✓ def5678 (completed) | 45s
-Task: review PR...
 ```
 
 The widget shows:
