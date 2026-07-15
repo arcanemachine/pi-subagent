@@ -39,7 +39,7 @@ No local `npm install` is required for normal usage.
 Or use a symlink for development:
 
 ```bash
-ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
+ln -s /path/to/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 ```
 
 ## Usage
@@ -49,7 +49,6 @@ ln -s /workspace/projects/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `/subagent spawn:<agent> <task>` - Spawn a new sub-agent using configured agent type
 - `/subagent status [id]` - View structured live status for one/all active sub-agents
 - `/subagent notify <id> <text>` - Send follow-up guidance to a running sub-agent
-- `/subagent redirect <id> <focus>` - Refocus a running sub-agent with explicit ACK template
 - `/subagent kill <id>` - Kill a specific sub-agent
 - `/subagent killall` - Kill all sub-agents
 - `/subagent show [id]` - Watch sub-agent(s) in widget (no ID = all)
@@ -117,7 +116,7 @@ Replace `example1`, `example2`, and `example3` with keys you actually configure.
 
 Project settings override global settings by agent key. `max_active_subagents` is an optional hard cap on concurrently running sub-agents; spawn requests above the configured cap are rejected (not queued). If omitted, concurrency is unlimited.
 
-`default_timeout_seconds` controls an automatic timeout notification for each spawned sub-agent. When the timeout is reached, the parent sends guidance asking the sub-agent to report progress so far and finish up. The default is no timeout.
+`default_timeout_seconds` controls an automatic timeout notification for each spawned sub-agent. When the timeout is reached, the parent sends guidance asking the sub-agent to report progress so far and finish up. The default is 180 seconds.
 
 `allow_nested_subagents` controls whether spawned sub-agents can use this extension's own sub-agent tools. Default is `false` (nested sub-agents disabled). Set to `true` only if you explicitly want recursive fan-out.
 
@@ -144,7 +143,7 @@ The widget shows:
 - Current tool / last action (if running)
 - Optional progress hints when sub-agents self-report percentages (for example, "50%")
 
-Completed agents remain visible until you run `/subagent hide`.
+Completed agents are removed from the widget after their completion message is delivered.
 
 ## Development
 
@@ -160,7 +159,7 @@ npm run format
 To run directly in pi:
 
 ```bash
-cd /workspace/projects/pi/pi-subagent
+cd /path/to/pi-subagent
 pi -e ./src/index.ts
 ```
 
