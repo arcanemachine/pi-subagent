@@ -17,7 +17,7 @@ interface SubAgent {
   agentType?: string;
   model?: string;
   extraContext?: string;
-  status: "starting" | "running" | "completed" | "error";
+  status: "starting" | "running" | "completed" | "error" | "interrupted";
   activity: string[];
   currentResponsePreview: string;
   lastAssistantText?: string;
@@ -30,6 +30,7 @@ interface SubAgent {
     | "incomplete_result"
     | "assistant_error"
     | "process_error";
+  interruptionReason?: "reload";
   startTime: number;
   endTime?: number;
   exitCode?: number;
@@ -61,7 +62,11 @@ let maxActiveSubagents: number | undefined = undefined;
 let defaultTimeoutSeconds: number | undefined = 180;
 let allowNestedSubagents = false;
 let sendCompletionMessage:
-  | ((content: string, details?: Record<string, unknown>) => void)
+  | ((
+      content: string,
+      details?: Record<string, unknown>,
+      options?: { triggerTurn?: boolean },
+    ) => void)
   | null = null;
 
 const MAX_ACTIVE_SUBAGENTS_CAP = 100;
@@ -304,7 +309,11 @@ function formatSubagentPrompt(task: string, extraContext?: string): string {
 }
 
 function isAgentFinished(agent: SubAgent): boolean {
-  return agent.status === "completed" || agent.status === "error";
+  return (
+    agent.status === "completed" ||
+    agent.status === "error" ||
+    agent.status === "interrupted"
+  );
 }
 
 function transitionAgentStatus(
@@ -317,13 +326,14 @@ function transitionAgentStatus(
     running: 1,
     completed: 2,
     error: 2,
+    interrupted: 2,
   };
 
   if (rank[nextStatus] < rank[agent.status]) {
     return;
   }
 
-  if (agent.status === "completed" || agent.status === "error") {
+  if (isAgentFinished(agent)) {
     return;
   }
 
@@ -331,7 +341,11 @@ function transitionAgentStatus(
   agent.lastAction = nextAction;
   agent.lastStateChangeAt = Date.now();
 
-  if (nextStatus === "completed" || nextStatus === "error") {
+  if (
+    nextStatus === "completed" ||
+    nextStatus === "error" ||
+    nextStatus === "interrupted"
+  ) {
     agent.endTime = Date.now();
     agent.currentTool = undefined;
   }
@@ -467,6 +481,28 @@ function removeAgentFromTracking(id: string): void {
   updateWatchWidget();
 }
 
+function interruptSubAgentForReload(agent: SubAgent): void {
+  agent.interruptionReason = "reload";
+  transitionAgentStatus(
+    agent,
+    "interrupted",
+    "interrupted by extension reload",
+  );
+  notifyAgentCompletion(agent, { triggerTurn: false });
+}
+
+function terminateSubAgentWithoutNotification(
+  agent: SubAgent,
+  action: string,
+): void {
+  clearSubAgentTimeout(agent);
+  clearSubAgentShutdown(agent);
+  transitionAgentStatus(agent, "interrupted", action);
+  agent.completionNotified = true;
+  agent.process.kill();
+  removeAgentFromTracking(agent.id);
+}
+
 function getFailureMessage(agent: SubAgent): string {
   if (agent.failureReason === "incomplete_result") {
     return "The sub-agent response was truncated before completion.";
@@ -488,16 +524,29 @@ function shouldSuggestNarrowerTask(agent: SubAgent): boolean {
   );
 }
 
-function notifyAgentCompletion(agent: SubAgent) {
+function notifyAgentCompletion(
+  agent: SubAgent,
+  options?: { triggerTurn?: boolean },
+) {
   if (agent.completionNotified) return;
-  if (agent.status !== "completed" && agent.status !== "error") return;
+  if (!isAgentFinished(agent)) return;
 
   const durationSec = Math.max(
     0,
     Math.round(((agent.endTime || Date.now()) - agent.startTime) / 1000),
   );
-  const statusEmoji = agent.status === "completed" ? "✅" : "❌";
-  const statusText = agent.status === "completed" ? "completed" : "errored";
+  const statusEmoji =
+    agent.status === "completed"
+      ? "✅"
+      : agent.status === "interrupted"
+        ? "⚠️"
+        : "❌";
+  const statusText =
+    agent.status === "completed"
+      ? "completed"
+      : agent.status === "interrupted"
+        ? "was interrupted"
+        : "errored";
   const exitText =
     agent.exitCode !== undefined ? ` | exit=${agent.exitCode}` : "";
   const resultText = agent.completionResult?.trim();
@@ -513,7 +562,9 @@ function notifyAgentCompletion(agent: SubAgent) {
         (shouldSuggestNarrowerTask(agent)
           ? "\nSuggestion: If retrying, use a simpler or more narrowly scoped task."
           : "")
-      : "";
+      : agent.status === "interrupted" && agent.interruptionReason === "reload"
+        ? "\nreason: Extension reload intentionally terminated the child process (SIGTERM, commonly reported as exit 143). Its work may be incomplete; retry if still needed."
+        : "";
 
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
@@ -533,8 +584,10 @@ function notifyAgentCompletion(agent: SubAgent) {
       result: resultText,
       partialResult,
       failureReason: agent.failureReason,
+      interruptionReason: agent.interruptionReason,
       finalReportText: resultText || partialResult || "",
     },
+    options,
   );
   agent.completionNotified = true;
   requestProcessShutdown(agent);
@@ -542,7 +595,7 @@ function notifyAgentCompletion(agent: SubAgent) {
 }
 
 function settleSubAgent(agent: SubAgent, completionAction: string): void {
-  if (agent.status === "completed" || agent.status === "error") return;
+  if (isAgentFinished(agent)) return;
 
   const toolResult = agent.completionResult?.trim();
   if (toolResult) {
@@ -851,7 +904,7 @@ function spawnSubAgent(
 
 function getActiveAgentCount(): number {
   return Array.from(activeAgents.values()).filter(
-    (a) => a.status !== "completed" && a.status !== "error",
+    (agent) => !isAgentFinished(agent),
   ).length;
 }
 
@@ -1123,14 +1176,11 @@ function killSubAgent(id: string): {
     return { ok: false, reason: "not_found" };
   }
 
-  if (agent.status === "completed" || agent.status === "error") {
+  if (isAgentFinished(agent)) {
     return { ok: false, reason: "already_finished" };
   }
 
-  clearSubAgentTimeout(agent);
-  clearSubAgentShutdown(agent);
-  agent.process.kill();
-  removeAgentFromTracking(id);
+  terminateSubAgentWithoutNotification(agent, "killed by parent");
   return { ok: true };
 }
 
@@ -1155,7 +1205,7 @@ function notifySubAgent(
     return { ok: false, reason: "not_found" };
   }
 
-  if (agent.status === "completed" || agent.status === "error") {
+  if (isAgentFinished(agent)) {
     return { ok: false, reason: "already_finished" };
   }
 
@@ -1218,7 +1268,7 @@ function renderSubagentMessage(
 
 type SubagentCompleteDetails = {
   agentId?: string;
-  status?: "completed" | "error" | string;
+  status?: "completed" | "error" | "interrupted" | string;
   taskTitle?: string;
   agentType?: string;
   durationSec?: number;
@@ -1284,9 +1334,13 @@ export default function (pi: ExtensionAPI) {
   sendCompletionMessage = (
     content: string,
     details?: Record<string, unknown>,
+    options?: { triggerTurn?: boolean },
   ) => {
     const shouldTriggerTurn =
-      !!currentCtx && currentCtx.isIdle() && !currentCtx.hasPendingMessages();
+      options?.triggerTurn !== false &&
+      !!currentCtx &&
+      currentCtx.isIdle() &&
+      !currentCtx.hasPendingMessages();
 
     pi.sendMessage(
       {
@@ -1314,8 +1368,13 @@ export default function (pi: ExtensionAPI) {
         | SubagentCompleteDetails
         | undefined;
       const isError = details?.status === "error";
-      const statusText = isError ? "errored" : "completed";
-      const emoji = isError ? "❌" : "✅";
+      const isInterrupted = details?.status === "interrupted";
+      const statusText = isInterrupted
+        ? "was interrupted"
+        : isError
+          ? "errored"
+          : "completed";
+      const emoji = isInterrupted ? "⚠️" : isError ? "❌" : "✅";
       const duration =
         typeof details?.durationSec === "number"
           ? `${details.durationSec}s`
@@ -2008,12 +2067,21 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // Clean up on shutdown
-  pi.on("session_shutdown", async () => {
-    for (const [, agent] of activeAgents) {
-      clearSubAgentTimeout(agent);
-      clearSubAgentShutdown(agent);
-      agent.process.kill();
+  // Clean up on shutdown. Reloads stay in the same conversation, so surface
+  // that interruption without triggering a new turn. Other shutdown reasons
+  // discard or replace the current session and should not emit completions.
+  pi.on("session_shutdown", async (event) => {
+    for (const agent of Array.from(activeAgents.values())) {
+      if (event.reason === "reload") {
+        interruptSubAgentForReload(agent);
+        clearSubAgentShutdown(agent);
+        agent.process.kill();
+      } else {
+        terminateSubAgentWithoutNotification(
+          agent,
+          `interrupted by session ${event.reason}`,
+        );
+      }
     }
     activeAgents.clear();
   });
@@ -2030,10 +2098,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_before_switch", async (event) => {
     if (event.reason === "new") {
       // Kill any remaining processes and clear the list
-      for (const [, agent] of activeAgents) {
-        clearSubAgentTimeout(agent);
-        clearSubAgentShutdown(agent);
-        agent.process.kill();
+      for (const agent of Array.from(activeAgents.values())) {
+        terminateSubAgentWithoutNotification(agent, "interrupted by /new");
       }
       activeAgents.clear();
       updateSubAgentStatus();
@@ -2068,6 +2134,8 @@ export const __test = {
   handleSubAgentEvent,
   settleSubAgent,
   recordActivity,
+  interruptSubAgentForReload,
+  terminateSubAgentWithoutNotification,
 
   setDefaultTimeoutSeconds(seconds: number | undefined) {
     defaultTimeoutSeconds = seconds;
@@ -2079,7 +2147,11 @@ export const __test = {
 
   setCompletionSender(
     sender:
-      | ((content: string, details?: Record<string, unknown>) => void)
+      | ((
+          content: string,
+          details?: Record<string, unknown>,
+          options?: { triggerTurn?: boolean },
+        ) => void)
       | null,
   ) {
     sendCompletionMessage = sender;

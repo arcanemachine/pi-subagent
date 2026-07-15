@@ -21,10 +21,13 @@ function assistantMessage(
 }
 
 function captureCompletions() {
-  const sent: Array<{ content: string; details?: Record<string, unknown> }> =
-    [];
-  __test.setCompletionSender((content, details) =>
-    sent.push({ content, details }),
+  const sent: Array<{
+    content: string;
+    details?: Record<string, unknown>;
+    options?: { triggerTurn?: boolean };
+  }> = [];
+  __test.setCompletionSender((content, details, options) =>
+    sent.push({ content, details, options }),
   );
   return sent;
 }
@@ -137,6 +140,50 @@ test("process failures do not suggest changing task scope", () => {
 
   assert.ok(sent[0]?.content.includes("process exited unexpectedly"));
   assert.ok(!sent[0]?.content.includes("narrowly scoped"));
+});
+
+test("reload interruptions are reported once without triggering a turn", () => {
+  __test.resetState();
+  const sent = captureCompletions();
+  const agent = __test.addMockAgent("T-reload", { processExited: true });
+
+  __test.interruptSubAgentForReload(agent);
+  __test.notifyAgentCompletion(agent);
+
+  assert.equal(agent.status, "interrupted");
+  assert.equal(agent.interruptionReason, "reload");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.details?.status, "interrupted");
+  assert.equal(sent[0]?.details?.interruptionReason, "reload");
+  assert.equal(sent[0]?.options?.triggerTurn, false);
+  assert.ok(sent[0]?.content.toLowerCase().includes("extension reload"));
+  assert.ok(sent[0]?.content.includes("exit 143"));
+  assert.ok(!sent[0]?.content.includes("narrowly scoped"));
+});
+
+test("intentional termination suppresses completion messages", () => {
+  __test.resetState();
+  const sent = captureCompletions();
+  let killCalls = 0;
+  const process = {
+    kill() {
+      killCalls++;
+    },
+    stdin: {
+      destroyed: false,
+      write() {},
+      end() {},
+    },
+  } as unknown as ChildProcess;
+  const agent = __test.addMockAgent("T-intentional", { process });
+
+  __test.terminateSubAgentWithoutNotification(agent, "killed by parent");
+  __test.notifyAgentCompletion(agent);
+
+  assert.equal(agent.status, "interrupted");
+  assert.equal(agent.completionNotified, true);
+  assert.equal(killCalls, 1);
+  assert.equal(sent.length, 0);
 });
 
 test("activity history and streaming previews are bounded", () => {
