@@ -62,7 +62,7 @@ ln -s /path/to/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `subagent_kill` - Kill a specific sub-agent by ID
 - `subagent_list_types` - List configured agent types (name/model/when_to_use)
 
-Child sub-agents receive a dedicated `subagent_complete` tool with one required `result` field. Calling it submits the complete deliverable and gracefully shuts down the child process. If a child omits the tool, its final assistant response is used as a fallback so useful work is not discarded over formatting. Empty, errored, aborted, or truncated responses are reported as failures. Completed sub-agents are automatically removed from active tracking.
+Child sub-agents receive a dedicated `subagent_complete` tool with one required `result` field. A successful call submits the complete deliverable and gracefully shuts down the child process; failed calls can be corrected and retried. If a child omits the tool, its final assistant response is used as a fallback so useful work is not discarded over formatting. Empty, errored, aborted, or truncated responses are reported as failures. Completed sub-agents are automatically removed from active tracking.
 
 If an extension reload interrupts an active child, the parent conversation receives an `interrupted` message without triggering a new turn. The intentional SIGTERM is identified as infrastructure lifecycle behavior rather than a task failure.
 

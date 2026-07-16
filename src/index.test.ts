@@ -57,12 +57,15 @@ test("uses the completion tool result as the authoritative deliverable", () => {
   });
   __test.handleSubAgentEvent(agent, {
     type: "tool_execution_start",
+    toolCallId: "completion-1",
     toolName: "subagent_complete",
     args: { result: "authoritative result" },
   });
   __test.handleSubAgentEvent(agent, {
-    type: "message_end",
-    message: assistantMessage("Result submitted."),
+    type: "tool_execution_end",
+    toolCallId: "completion-1",
+    toolName: "subagent_complete",
+    isError: false,
   });
   __test.handleSubAgentEvent(agent, { type: "agent_settled" });
 
@@ -71,6 +74,45 @@ test("uses the completion tool result as the authoritative deliverable", () => {
   assert.equal(sent[0]?.details?.result, "authoritative result");
   assert.ok(sent[0]?.content.includes("authoritative result"));
   assert.ok(!sent[0]?.content.includes("report validation"));
+});
+
+test("rejected completion calls can be corrected and retried", () => {
+  __test.resetState();
+  const sent = captureCompletions();
+  const agent = __test.addMockAgent("T-tool-retry", { processExited: true });
+
+  __test.handleSubAgentEvent(agent, {
+    type: "tool_execution_start",
+    toolCallId: "completion-1",
+    toolName: "subagent_complete",
+    args: { result: "rejected result" },
+  });
+  __test.handleSubAgentEvent(agent, {
+    type: "tool_execution_end",
+    toolCallId: "completion-1",
+    toolName: "subagent_complete",
+    isError: true,
+  });
+
+  assert.equal(agent.completionResult, undefined);
+  assert.ok(agent.activity.some((entry) => entry.includes("retry required")));
+
+  __test.handleSubAgentEvent(agent, {
+    type: "tool_execution_start",
+    toolCallId: "completion-2",
+    toolName: "subagent_complete",
+    args: { result: "corrected result" },
+  });
+  __test.handleSubAgentEvent(agent, {
+    type: "tool_execution_end",
+    toolCallId: "completion-2",
+    toolName: "subagent_complete",
+    isError: false,
+  });
+  __test.handleSubAgentEvent(agent, { type: "agent_settled" });
+
+  assert.equal(agent.status, "completed");
+  assert.equal(sent[0]?.details?.result, "corrected result");
 });
 
 test("accepts ordinary final assistant text when the completion tool is omitted", () => {

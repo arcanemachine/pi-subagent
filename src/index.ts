@@ -24,6 +24,8 @@ interface SubAgent {
   lastAssistantStopReason?: string;
   lastAssistantError?: string;
   completionResult?: string;
+  pendingCompletionResult?: string;
+  pendingCompletionToolCallId?: string;
   partialResult?: string;
   failureReason?:
     | "missing_result"
@@ -98,7 +100,7 @@ type PiSubagentSettings = {
 const STALE_RUNNING_MS = 60_000;
 const SUBAGENT_COMPLETION_INSTRUCTIONS = `Do the requested task only; do not expand scope. If the task is too large, complete the highest-value slice and clearly state what remains.
 
-When finished or blocked, call the \`subagent_complete\` tool exactly once. Put the complete deliverable for the parent in its \`result\` field. The result may use normal Markdown and should include evidence, changed files, commands, or open questions only when relevant. Do not include planning or process narration.
+When finished or blocked, call the \`subagent_complete\` tool with the complete deliverable for the parent in its \`result\` field. A successful call should be your final action. If the tool returns an error, correct the result and call it again. The result may use normal Markdown and should include evidence, changed files, commands, or open questions only when relevant. Do not include planning or process narration.
 
 If the completion tool is unavailable, return the complete deliverable as your final response instead.`;
 function readJsonFile(path: string): Record<string, unknown> {
@@ -714,8 +716,10 @@ function handleSubAgentEvent(
         event.args && typeof event.args.result === "string"
           ? event.args.result.trim()
           : "";
-      if (result) agent.completionResult = result;
-      recordActivity(agent, "🏁 Completion submitted");
+      agent.pendingCompletionResult = result || undefined;
+      agent.pendingCompletionToolCallId =
+        typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+      recordActivity(agent, "🏁 Completion requested");
     } else {
       recordActivity(
         agent,
@@ -729,6 +733,31 @@ function handleSubAgentEvent(
     const toolName =
       typeof event.toolName === "string" ? event.toolName : undefined;
     agent.currentTool = undefined;
+
+    if (toolName === "subagent_complete") {
+      const toolCallId =
+        typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+      const matchesPendingCall =
+        !agent.pendingCompletionToolCallId ||
+        !toolCallId ||
+        agent.pendingCompletionToolCallId === toolCallId;
+
+      if (matchesPendingCall && event.isError !== true) {
+        agent.completionResult = agent.pendingCompletionResult;
+        agent.lastAction = "✅ completion accepted";
+        recordActivity(agent, "🏁 Completion accepted");
+      } else {
+        agent.lastAction = "❌ completion rejected";
+        recordActivity(agent, "❌ Completion rejected; retry required");
+      }
+
+      if (matchesPendingCall) {
+        agent.pendingCompletionResult = undefined;
+        agent.pendingCompletionToolCallId = undefined;
+      }
+      return;
+    }
+
     agent.lastAction = toolName ? `✅ ${toolName}` : "tool finished";
     return;
   }
@@ -1287,7 +1316,7 @@ export default function (pi: ExtensionAPI) {
       label: "Complete Sub-Agent Task",
       description:
         "Submit the complete final deliverable to the parent and finish this child sub-agent. " +
-        "Call this exactly once when the task is complete or blocked.",
+        "Call this when the task is complete or blocked. If it returns an error, correct the result and retry.",
       parameters: {
         type: "object",
         properties: {
