@@ -518,6 +518,9 @@ test("fleet window renders bounded live details and steers the selected agent", 
     );
     assert.ok(renderRequests > 0);
 
+    tui.terminal.rows = 60;
+    assert.equal(component.render(90).length, 49);
+
     tui.terminal.rows = 12;
     assert.ok(component.render(90).length <= 9);
     component.handleInput("\x1b");

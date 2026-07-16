@@ -586,7 +586,7 @@ export class SubagentFleetComponent implements Component, Focusable {
 
     const innerWidth = width - 2;
     const rows = this.tui.terminal?.rows ?? 32;
-    this.bodyHeight = Math.max(1, Math.min(22, Math.floor(rows * 0.75) - 7));
+    this.bodyHeight = Math.max(1, Math.min(42, Math.floor(rows * 0.9) - 8));
     const rosterWidth = Math.max(
       20,
       Math.min(28, Math.floor((innerWidth - 1) * 0.28)),
@@ -692,7 +692,7 @@ export async function openSubagentFleet(
         anchor: "center",
         width: "85%",
         minWidth: 60,
-        maxHeight: "75%",
+        maxHeight: "95%",
         margin: 1,
       },
     },
