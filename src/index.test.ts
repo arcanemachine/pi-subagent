@@ -568,14 +568,6 @@ test("fleet window renders bounded live details and steers the selected agent", 
     assert.ok(lines.some((line) => line.includes("Reviewing the current")));
     assert.ok(lines.every((line) => !line.includes("(done)")));
     assert.ok(lines.every((line) => visibleWidth(line) <= 90));
-    const firstRosterRow = lines.findIndex((line) =>
-      line.includes("agent-one"),
-    );
-    const secondRosterRow = lines.findIndex((line) =>
-      line.includes("agent-two"),
-    );
-    assert.equal(secondRosterRow, firstRosterRow + 2);
-    assert.equal(lines[firstRosterRow + 1]?.split("│")[1]?.trim(), "");
 
     component.handleInput("s");
     assert.ok(
@@ -729,7 +721,12 @@ test("fleet action rows wrap and include same-color spacing", () => {
     taskTitle: "render action",
     task: "Render the action",
     startTime: Date.now() - 1000,
-    activity: [action],
+    activity: [
+      "💬 First response",
+      action,
+      "↻ Second response",
+      "💬 Third response",
+    ],
     currentResponsePreview: "",
   };
   const toolBackgrounds: string[] = [];
@@ -757,11 +754,34 @@ test("fleet action rows wrap and include same-color spacing", () => {
   );
 
   try {
-    const rendered = component.render(90).join("\n");
+    const renderedLines = component.render(90);
+    const rendered = renderedLines.join("\n");
     assert.ok(
       rendered.includes("tail-marker"),
       "tool text must wrap, not truncate",
     );
+    const firstResponseRow = renderedLines.findIndex((line) =>
+      line.includes("First response"),
+    );
+    const toolStartRow = renderedLines.findIndex((line) =>
+      line.includes("search_web"),
+    );
+    const toolEndRow = renderedLines.findIndex((line) =>
+      line.includes("tail-marker"),
+    );
+    const secondResponseRow = renderedLines.findIndex((line) =>
+      line.includes("Retry: Second response"),
+    );
+    const thirdResponseRow = renderedLines.findIndex((line) =>
+      line.includes("Third response"),
+    );
+    const hasBlankDetailRow = (start: number, end: number) =>
+      renderedLines
+        .slice(start + 1, end)
+        .some((line) => line.split("│")[2]?.trim() === "");
+    assert.ok(hasBlankDetailRow(firstResponseRow, toolStartRow));
+    assert.ok(hasBlankDetailRow(toolEndRow, secondResponseRow));
+    assert.ok(hasBlankDetailRow(secondResponseRow, thirdResponseRow));
     assert.ok(
       toolBackgrounds.length >= 4,
       "tool row should span multiple lines",

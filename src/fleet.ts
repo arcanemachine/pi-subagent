@@ -381,30 +381,29 @@ export class SubagentFleetComponent implements Component, Focusable {
       return [this.theme.fg("dim", " No sub-agent sessions")];
     }
 
-    const visibleAgentCount = Math.max(1, Math.ceil(this.bodyHeight / 2));
     const start = Math.max(
       0,
       Math.min(
-        this.selected - visibleAgentCount + 1,
-        Math.max(0, this.agents.length - visibleAgentCount),
+        this.selected - this.bodyHeight + 1,
+        Math.max(0, this.agents.length - this.bodyHeight),
       ),
     );
-    const visibleAgents = this.agents.slice(start, start + visibleAgentCount);
-    return visibleAgents.flatMap((agent, offset) => {
-      const index = start + offset;
-      const marker =
-        index === this.selected ? this.theme.fg("accent", "›") : " ";
-      const name = agent.agentType ?? "agent";
-      const state =
-        agent.status === "error"
-          ? "(error)"
-          : agent.status === "interrupted"
-            ? "(stopped)"
-            : formatDuration(agent);
-      const left = `${marker} ${statusGlyph(agent, this.theme)} ${agent.id} ${name}`;
-      const line = rightAligned(left, this.theme.fg("dim", state), width);
-      return offset < visibleAgents.length - 1 ? [line, ""] : [line];
-    });
+    return this.agents
+      .slice(start, start + this.bodyHeight)
+      .map((agent, offset) => {
+        const index = start + offset;
+        const marker =
+          index === this.selected ? this.theme.fg("accent", "›") : " ";
+        const name = agent.agentType ?? "agent";
+        const state =
+          agent.status === "error"
+            ? "(error)"
+            : agent.status === "interrupted"
+              ? "(stopped)"
+              : formatDuration(agent);
+        const left = `${marker} ${statusGlyph(agent, this.theme)} ${agent.id} ${name}`;
+        return rightAligned(left, this.theme.fg("dim", state), width);
+      });
   }
 
   private wrapLines(text: string, width: number): string[] {
@@ -459,6 +458,18 @@ export class SubagentFleetComponent implements Component, Focusable {
       ...this.userMessageLines(agent.task, width),
     );
 
+    let previousBlockHasTrailingBlank = false;
+    const appendActivityBlock = (
+      block: string[],
+      options: { leadingBlank?: boolean; trailingBlank?: boolean } = {},
+    ) => {
+      if (!previousBlockHasTrailingBlank && !options.leadingBlank) {
+        lines.push("");
+      }
+      lines.push(...block);
+      previousBlockHasTrailingBlank = options.trailingBlank ?? false;
+    };
+
     let lastToolIndex = -1;
     for (let index = agent.activity.length - 1; index >= 0; index--) {
       if (agent.activity[index]?.startsWith("🔧 ")) {
@@ -469,9 +480,8 @@ export class SubagentFleetComponent implements Component, Focusable {
     for (const [index, activity] of agent.activity.entries()) {
       if (activity.startsWith("✅ RPC response")) continue;
       if (activity.startsWith("📨 Parent guidance: ")) {
-        lines.push(
-          "",
-          ...this.userMessageLines(
+        appendActivityBlock(
+          this.userMessageLines(
             activity.slice("📨 Parent guidance: ".length),
             width,
           ),
@@ -479,9 +489,8 @@ export class SubagentFleetComponent implements Component, Focusable {
         continue;
       }
       if (activity.startsWith("💬 ")) {
-        lines.push(
-          "",
-          ...this.wrapLines(
+        appendActivityBlock(
+          this.wrapLines(
             this.theme.fg("text", activity.slice("💬 ".length)),
             Math.max(1, width - 1),
           ).map((line) => ` ${line}`),
@@ -489,12 +498,13 @@ export class SubagentFleetComponent implements Component, Focusable {
         continue;
       }
       if (activity.startsWith("🔧 ")) {
-        lines.push(
-          ...this.toolActivityLines(
+        appendActivityBlock(
+          this.toolActivityLines(
             activity,
             width,
             index === lastToolIndex && Boolean(agent.currentTool),
           ),
+          { leadingBlank: true, trailingBlank: true },
         );
         continue;
       }
@@ -504,8 +514,8 @@ export class SubagentFleetComponent implements Component, Focusable {
         .replace(/^↻\s*/, "Retry: ")
         .replace(/^❌\s*/, "Error: ");
       const color = activity.startsWith("❌") ? "error" : "dim";
-      lines.push(
-        ...this.wrapLines(
+      appendActivityBlock(
+        this.wrapLines(
           this.theme.fg(color, ` ${statusText}`),
           Math.max(1, width),
         ),
@@ -514,17 +524,16 @@ export class SubagentFleetComponent implements Component, Focusable {
 
     const preview = agent.currentResponsePreview.trim();
     if (preview) {
-      lines.push(
-        "",
+      appendActivityBlock([
         ...this.wrapLines(
           this.theme.fg("text", preview),
           Math.max(1, width - 2),
         ).map((line) => ` ${line}`),
         this.theme.fg("accent", " ▍"),
-      );
+      ]);
     }
     if (agent.activity.length === 0 && !preview) {
-      lines.push("", this.theme.fg("dim", " Waiting for a response…"));
+      appendActivityBlock([this.theme.fg("dim", " Waiting for a response…")]);
     }
     return lines;
   }
