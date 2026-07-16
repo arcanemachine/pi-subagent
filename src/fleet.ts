@@ -426,21 +426,24 @@ export class SubagentFleetComponent implements Component, Focusable {
     );
   }
 
-  private toolActivityLine(
+  private toolActivityLines(
     activity: string,
     width: number,
     pending: boolean,
-  ): string {
+  ): string[] {
     const match = activity.match(/^🔧\s+([^:]+)(?::\s*(.*))?$/s);
     const toolName = match?.[1]?.trim() ?? "tool";
     const args = match?.[2]?.trim() ?? "";
     const content =
       ` ${this.theme.fg("toolTitle", this.theme.bold(toolName))}` +
       (args ? ` ${this.theme.fg("toolOutput", args)}` : "");
-    return this.theme.bg(
-      pending ? "toolPendingBg" : "toolSuccessBg",
-      fit(content, width),
+    const background = pending ? "toolPendingBg" : "toolSuccessBg";
+    const topBlank = this.theme.bg(background, fit("", width));
+    const contentLines = this.wrapLines(content, width).map((line) =>
+      this.theme.bg(background, fit(line, width)),
     );
+    const bottomBlank = this.theme.bg(background, fit("", width));
+    return [topBlank, ...contentLines, bottomBlank];
   }
 
   private conversationLines(agent: FleetAgentDetail, width: number): string[] {
@@ -488,8 +491,7 @@ export class SubagentFleetComponent implements Component, Focusable {
       }
       if (activity.startsWith("🔧 ")) {
         lines.push(
-          "",
-          this.toolActivityLine(
+          ...this.toolActivityLines(
             activity,
             width,
             index === lastToolIndex && Boolean(agent.currentTool),

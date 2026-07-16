@@ -632,6 +632,67 @@ test("fleet window confirms removal of selected and all finished sessions", () =
   }
 });
 
+test("fleet action rows wrap and include same-color spacing", () => {
+  const action =
+    "🔧 search_web: query=alpha " +
+    "overflow-marker ".repeat(8) +
+    "tail-marker";
+  const agent: FleetAgentDetail = {
+    id: "running-action",
+    status: "running",
+    taskTitle: "render action",
+    task: "Render the action",
+    startTime: Date.now() - 1000,
+    activity: [action],
+    currentResponsePreview: "",
+  };
+  const toolBackgrounds: string[] = [];
+  const component = new SubagentFleetComponent(
+    { terminal: { rows: 40, columns: 90 }, requestRender() {} } as never,
+    {
+      fg: (_color: string, text: string) => text,
+      bg: (color: string, text: string) => {
+        if (color === "toolSuccessBg") toolBackgrounds.push(text);
+        return text;
+      },
+      bold: (text: string) => text,
+    } as never,
+    {
+      listAgents: () => [agent],
+      getAgent: () => agent,
+      steer: () => ({ ok: true, message: "Guidance sent." }),
+      remove: () => ({ ok: true, message: "Removed." }),
+      removeAllFinished: () => ({ ok: true, message: "Removed all." }),
+      stop: () => ({ ok: true, message: "Stopped." }),
+      stopAllRunning: () => ({ ok: true, message: "Stopped all." }),
+    },
+    () => {},
+    60_000,
+  );
+
+  try {
+    const rendered = component.render(90).join("\n");
+    assert.ok(
+      rendered.includes("tail-marker"),
+      "tool text must wrap, not truncate",
+    );
+    assert.ok(
+      toolBackgrounds.length >= 4,
+      "tool row should span multiple lines",
+    );
+    assert.equal(toolBackgrounds[0]?.trim(), "");
+    assert.equal(toolBackgrounds[toolBackgrounds.length - 1]?.trim(), "");
+    assert.ok(
+      toolBackgrounds.every(
+        (line) => visibleWidth(line) === visibleWidth(toolBackgrounds[0] ?? ""),
+      ),
+      "every action line should fill the same background width",
+    );
+  } finally {
+    component.dispose();
+  }
+});
+
 test("fleet stop actions preserve stopped sessions and require confirmation", () => {
   const now = Date.now();
   const agents: FleetAgentDetail[] = [
