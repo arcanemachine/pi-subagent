@@ -321,7 +321,7 @@ test("fleet stop actions terminate active agents but retain their sessions", () 
   assert.equal(source.listAgents().length, 2);
 });
 
-test("registers steer command and tool terminology", async () => {
+test("registers steer terminology and supports steering all agents", async () => {
   __test.resetState();
   const tools: any[] = [];
   const commands: any[] = [];
@@ -357,6 +357,43 @@ test("registers steer command and tool terminology", async () => {
       entry.includes("Parent guidance: Focus on the requested scope"),
     ),
   );
+
+  const secondAgent = __test.addMockAgent("T-steer-all");
+  const unavailableAgent = __test.addMockAgent("T-steer-unavailable");
+  (unavailableAgent.process.stdin as any).destroyed = true;
+  const allResult = await steerTool.execute(
+    "call-steer-all",
+    { agent_id: "all", text: "Stop expanding scope" },
+    undefined,
+    undefined,
+    undefined,
+  );
+  assert.equal(allResult.details.targeted, 3);
+  assert.equal(allResult.details.sent, 2);
+  assert.equal(allResult.details.failed, 1);
+  assert.ok(allResult.content[0].text.includes("✓ T-steer: sent"));
+  assert.ok(allResult.content[0].text.includes("✓ T-steer-all: sent"));
+  assert.ok(
+    allResult.content[0].text.includes(
+      "✗ T-steer-unavailable: cannot receive guidance",
+    ),
+  );
+  assert.ok(
+    secondAgent.activity.some((entry) =>
+      entry.includes("Parent guidance: Stop expanding scope"),
+    ),
+  );
+
+  const notifications: Array<{ message: string; level: string }> = [];
+  await subagentCommand.command.handler("steer all Finish now", {
+    cwd: process.cwd(),
+    ui: {
+      notify: (message: string, level: string) =>
+        notifications.push({ message, level }),
+    },
+  });
+  assert.ok(notifications[0]?.message.includes("Sent guidance to 2/3"));
+  assert.equal(notifications[0]?.level, "warning");
 });
 
 test("child-only completion tool submits one result and requests shutdown", async () => {

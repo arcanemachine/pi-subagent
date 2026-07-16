@@ -1287,6 +1287,61 @@ function steerSubAgent(
   return { ok: true };
 }
 
+type SteerDelivery = {
+  agentId: string;
+  sent: boolean;
+  reason?:
+    | "not_found"
+    | "already_finished"
+    | "stdin_unavailable"
+    | "empty_message";
+};
+
+type SteerAllSummary = {
+  targeted: number;
+  sent: number;
+  failed: number;
+  deliveries: SteerDelivery[];
+};
+
+function steerAllSubAgents(text: string): SteerAllSummary {
+  const deliveries = Array.from(activeAgents.keys()).map((agentId) => {
+    const result = steerSubAgent(agentId, text);
+    return result.ok
+      ? { agentId, sent: true }
+      : { agentId, sent: false, reason: result.reason };
+  });
+
+  const sent = deliveries.filter((delivery) => delivery.sent).length;
+  return {
+    targeted: deliveries.length,
+    sent,
+    failed: deliveries.length - sent,
+    deliveries,
+  };
+}
+
+function describeSteerFailure(reason: SteerDelivery["reason"]): string {
+  if (reason === "already_finished") return "already finished";
+  if (reason === "stdin_unavailable") return "cannot receive guidance";
+  if (reason === "empty_message") return "guidance is empty";
+  return "not found";
+}
+
+function formatSteerAllSummary(summary: SteerAllSummary): string {
+  if (summary.targeted === 0) return "No running sub-agents to steer.";
+
+  const header =
+    `Sent guidance to ${summary.sent}/${summary.targeted} running sub-agent` +
+    `${summary.targeted === 1 ? "" : "s"}.`;
+  const deliveries = summary.deliveries.map((delivery) =>
+    delivery.sent
+      ? `✓ ${delivery.agentId}: sent`
+      : `✗ ${delivery.agentId}: ${describeSteerFailure(delivery.reason)}`,
+  );
+  return [header, ...deliveries].join("\n");
+}
+
 function toFleetAgentSummary(agent: SubAgent): FleetAgentSummary {
   return {
     id: agent.id,
@@ -1563,7 +1618,7 @@ export default function (pi: ExtensionAPI) {
         { value: "hide", label: "hide [id] — Stop watching (no ID = all)" },
         {
           value: "steer",
-          label: "steer <id> <text> — Send guidance to a running sub-agent",
+          label: "steer <id|all> <text> — Send guidance to running sub-agents",
         },
       ];
 
@@ -1734,7 +1789,16 @@ export default function (pi: ExtensionAPI) {
           const text = rest.slice(1).join(" ");
 
           if (!targetId || !text.trim()) {
-            ctx.ui.notify("Usage: /subagent steer <id> <text>", "error");
+            ctx.ui.notify("Usage: /subagent steer <id|all> <text>", "error");
+            return;
+          }
+
+          if (targetId === "all") {
+            const summary = steerAllSubAgents(text);
+            ctx.ui.notify(
+              formatSteerAllSummary(summary),
+              summary.failed > 0 || summary.targeted === 0 ? "warning" : "info",
+            );
             return;
           }
 
@@ -2040,15 +2104,16 @@ export default function (pi: ExtensionAPI) {
     name: "subagent_steer",
     label: "Steer Sub-Agent",
     description:
-      "Send guidance to a running sub-agent by ID. Use to redirect a sub-agent that is drifting from scope, " +
-      "answer a question it asked, or steer it toward finishing. Prefer this over killing and re-spawning " +
-      "when the sub-agent is still making progress but on the wrong track.",
+      "Send guidance to a running sub-agent by ID, or use `all` to steer every running sub-agent with a per-agent delivery summary. " +
+      "Use to redirect sub-agents that are drifting from scope, answer a question they asked, or steer them toward finishing. " +
+      "Prefer this over killing and re-spawning when sub-agents are still making progress but on the wrong track.",
     parameters: {
       type: "object",
       properties: {
         agent_id: {
           type: "string",
-          description: "The sub-agent ID to message",
+          description:
+            "The sub-agent ID to steer, or `all` for every running sub-agent",
         },
         text: {
           type: "string",
@@ -2064,6 +2129,23 @@ export default function (pi: ExtensionAPI) {
       onUpdate,
       ctx,
     ) {
+      if (params.agent_id === "all") {
+        const summary = steerAllSubAgents(params.text);
+        return {
+          content: [
+            {
+              type: "text",
+              text: formatSteerAllSummary(summary),
+            },
+          ],
+          isError: summary.targeted === 0 || summary.sent === 0,
+          details: {
+            all: true,
+            ...summary,
+          },
+        };
+      }
+
       const result = steerSubAgent(params.agent_id, params.text);
 
       if (!result.ok) {
