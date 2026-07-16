@@ -321,7 +321,7 @@ test("fleet stop actions terminate active agents but retain their sessions", () 
   assert.equal(source.listAgents().length, 2);
 });
 
-test("registers steer terminology and supports steering all agents", async () => {
+test("registers the supported command surface and steers all agents", async () => {
   __test.resetState();
   const tools: any[] = [];
   const commands: any[] = [];
@@ -335,12 +335,35 @@ test("registers steer terminology and supports steering all agents", async () =>
   } as any);
 
   assert.ok(tools.some((tool) => tool.name === "subagent_steer"));
+  assert.ok(tools.some((tool) => tool.name === "subagent_status"));
   assert.ok(!tools.some((tool) => tool.name === "subagent_notify"));
 
   const subagentCommand = commands.find((entry) => entry.name === "subagent");
   const completions = subagentCommand.command.getArgumentCompletions("");
   assert.ok(completions.some((entry: any) => entry.value === "steer"));
   assert.ok(!completions.some((entry: any) => entry.value === "notify"));
+  for (const removedCommand of ["show", "hide", "status"]) {
+    assert.ok(
+      !completions.some((entry: any) => entry.value === removedCommand),
+    );
+  }
+
+  const rejectedCommands: Array<{ message: string; level: string }> = [];
+  for (const removedCommand of ["show", "hide", "status"]) {
+    await subagentCommand.command.handler(removedCommand, {
+      cwd: process.cwd(),
+      ui: {
+        notify: (message: string, level: string) =>
+          rejectedCommands.push({ message, level }),
+      },
+    });
+  }
+  assert.equal(rejectedCommands.length, 3);
+  assert.ok(
+    rejectedCommands.every(
+      ({ message, level }) => message.startsWith("Usage:") && level === "error",
+    ),
+  );
 
   const agent = __test.addMockAgent("T-steer");
   const steerTool = tools.find((tool) => tool.name === "subagent_steer");

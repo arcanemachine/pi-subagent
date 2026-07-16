@@ -63,9 +63,7 @@ interface SubAgent {
 const activeAgents = new Map<string, SubAgent>();
 const recentFleetAgents = new Map<string, FleetAgentDetail>();
 let currentCtx: ExtensionContext | null = null;
-let watchedAgentIds: Set<string> = new Set();
 let nextAgentId = 1;
-let watchAllMode = false; // True when watching all agents (auto-add new ones)
 let configuredAgents: Record<string, SubagentProfile> = {};
 let maxActiveSubagents: number | undefined = undefined;
 let defaultTimeoutSeconds: number | undefined = 180;
@@ -86,11 +84,7 @@ const MAX_RESPONSE_PREVIEW_CHARS = 4000;
 const MAX_RECENT_FLEET_AGENTS = 20;
 const PROCESS_SHUTDOWN_GRACE_MS = 2000;
 const TIMEOUT_WRAP_UP_WARNING_SECONDS = 60;
-const WATCH_WIDGET_UPDATE_INTERVAL_MS = 250;
 let timeoutEscalationDelayMs = 30000;
-
-let watchWidgetUpdateHandle: NodeJS.Timeout | undefined;
-let lastWatchWidgetUpdateAt = 0;
 
 type SubagentProfile = {
   model: string;
@@ -504,9 +498,7 @@ function removeAgentFromTracking(id: string): void {
   const agent = activeAgents.get(id);
   if (agent) rememberAgentForFleet(agent);
   activeAgents.delete(id);
-  watchedAgentIds.delete(id);
   updateSubAgentStatus();
-  updateWatchWidget();
 }
 
 function interruptSubAgentForReload(agent: SubAgent): void {
@@ -884,13 +876,7 @@ function spawnSubAgent(
       }
     }
 
-    // Update widget to show current activity
     updateSubAgentStatus();
-
-    // Update watch widget if this agent is being watched
-    if (watchedAgentIds.has(id)) {
-      scheduleWatchWidgetUpdate();
-    }
   });
 
   // Handle stderr
@@ -932,9 +918,6 @@ function spawnSubAgent(
     }
 
     updateSubAgentStatus();
-    if (watchedAgentIds.has(id)) {
-      updateWatchWidget();
-    }
   });
 
   // Send the initial prompt
@@ -946,12 +929,6 @@ function spawnSubAgent(
 
   activeAgents.set(id, agent);
   scheduleSubAgentTimeout(agent, timeoutSecondsOverride);
-
-  // Auto-add to watch list if in watch-all mode
-  if (watchAllMode) {
-    watchedAgentIds.add(id);
-    updateWatchWidget();
-  }
 
   updateSubAgentStatus();
   return agent;
@@ -1095,133 +1072,6 @@ function updateSubAgentStatus() {
   currentCtx.ui.setStatus("subagent", getStatusText());
 }
 
-function buildTranscriptLines(
-  agent: SubAgent,
-  maxLines: number = 10,
-): string[] {
-  const entries = [...agent.activity];
-  const preview = agent.currentResponsePreview.trim();
-  if (preview) entries.push(`💬 ${preview}`);
-  return entries.slice(-maxLines);
-}
-
-function scheduleWatchWidgetUpdate(force = false) {
-  if (force) {
-    if (watchWidgetUpdateHandle) {
-      clearTimeout(watchWidgetUpdateHandle);
-      watchWidgetUpdateHandle = undefined;
-    }
-    lastWatchWidgetUpdateAt = Date.now();
-    updateWatchWidget();
-    return;
-  }
-
-  if (watchWidgetUpdateHandle) return;
-
-  const elapsed = Date.now() - lastWatchWidgetUpdateAt;
-  const delay = Math.max(0, WATCH_WIDGET_UPDATE_INTERVAL_MS - elapsed);
-
-  watchWidgetUpdateHandle = setTimeout(() => {
-    watchWidgetUpdateHandle = undefined;
-    lastWatchWidgetUpdateAt = Date.now();
-    updateWatchWidget();
-  }, delay);
-}
-
-function updateWatchWidget() {
-  if (!currentCtx) return;
-
-  // Clean up watched IDs that no longer exist
-  for (const id of watchedAgentIds) {
-    if (!activeAgents.has(id)) {
-      watchedAgentIds.delete(id);
-    }
-  }
-
-  // If no agents to watch, show empty state or clear
-  if (watchedAgentIds.size === 0) {
-    if (watchAllMode) {
-      const emptyMessage =
-        "👁 Watching all sub-agents\n────────────────────────────────────────\nNo sub-agents running";
-      currentCtx.ui.setWidget("subagent-watch", emptyMessage.split("\n"));
-    } else {
-      currentCtx.ui.setWidget("subagent-watch", undefined);
-    }
-    return;
-  }
-
-  const agentCount = watchedAgentIds.size;
-  const compactMode = agentCount >= 3;
-
-  const widgetLines: string[] = [
-    "👁 Watching all sub-agents",
-    "────────────────────────────────────────",
-  ];
-
-  const orderedWatchedIds = watchAllMode
-    ? Array.from(watchedAgentIds).reverse()
-    : Array.from(watchedAgentIds);
-
-  for (const id of orderedWatchedIds) {
-    const agent = activeAgents.get(id);
-    if (!agent) continue;
-
-    const duration = agent.endTime
-      ? Math.floor((agent.endTime - agent.startTime) / 1000)
-      : Math.floor((Date.now() - agent.startTime) / 1000);
-
-    const statusIcon =
-      agent.status === "running"
-        ? "⏳"
-        : agent.status === "completed"
-          ? "✓"
-          : "✗";
-    const modelLabel = agent.model || "(model unknown)";
-
-    const noResponseYet =
-      (agent.status === "starting" || agent.status === "running") &&
-      !agent.receivedEvent &&
-      Date.now() - agent.startTime > 5000;
-
-    if (compactMode) {
-      // Compact: one line per agent
-      const actionInfo = agent.currentTool
-        ? agent.currentTool
-        : agent.lastAction
-          ? agent.lastAction
-          : noResponseYet
-            ? "no response yet"
-            : "idle";
-      const progressInfo =
-        agent.progressPercent !== undefined &&
-        (agent.status === "starting" || agent.status === "running")
-          ? `~${agent.progressPercent}% | `
-          : "";
-      widgetLines.push(
-        `${statusIcon} ${id} ${agent.status} ${duration}s | ${modelLabel} | ${progressInfo}${actionInfo.slice(0, 60)}`,
-      );
-    } else {
-      // Verbose: full info with transcript
-      widgetLines.push(
-        `${statusIcon} ${id} (${agent.status}) | ${duration}s | ${modelLabel}`,
-      );
-      widgetLines.push(`Task: ${agent.taskTitle}`);
-
-      if (noResponseYet) {
-        widgetLines.push("⚠ No response from sub-agent process yet");
-      }
-
-      const transcriptLines = buildTranscriptLines(agent, 5);
-      if (transcriptLines.length > 0) {
-        widgetLines.push(...transcriptLines);
-      }
-      widgetLines.push("────────────────────────────────────────");
-    }
-  }
-
-  currentCtx.ui.setWidget("subagent-watch", widgetLines);
-}
-
 function killSubAgent(id: string): {
   ok: boolean;
   reason?: "not_found" | "already_finished";
@@ -1280,9 +1130,6 @@ function steerSubAgent(
   agent.lastAction = "📨 steer sent";
   agent.lastActivity = Date.now();
   updateSubAgentStatus();
-  if (watchedAgentIds.has(id)) {
-    updateWatchWidget();
-  }
 
   return { ok: true };
 }
@@ -1606,16 +1453,9 @@ export default function (pi: ExtensionAPI) {
       refreshConfiguredAgents(currentCtx?.cwd ?? process.cwd());
 
       const baseItems = [
-        {
-          value: "status",
-          label:
-            "status [id] — Show current structured status (do NOT use for routine polling)",
-        },
         { value: "fleet", label: "fleet — Open the live sub-agent window" },
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
         { value: "killall", label: "killall — Kill all sub-agents" },
-        { value: "show", label: "show [id] — Watch sub-agent (no ID = all)" },
-        { value: "hide", label: "hide [id] — Stop watching (no ID = all)" },
         {
           value: "steer",
           label: "steer <id|all> <text> — Send guidance to running sub-agents",
@@ -1648,7 +1488,7 @@ export default function (pi: ExtensionAPI) {
       const trimmedArgs = args.trim();
       if (!trimmedArgs) {
         ctx.ui.notify(
-          "Usage: /subagent spawn:<agent>|fleet|status|steer|kill|killall|show|hide",
+          "Usage: /subagent spawn:<agent>|fleet|steer|kill|killall",
           "error",
         );
         return;
@@ -1748,42 +1588,6 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        case "status": {
-          const statusId = rest[0];
-
-          if (statusId) {
-            const agent = activeAgents.get(statusId);
-            if (!agent) {
-              const notFound = {
-                found: false,
-                error: {
-                  code: "not_found",
-                  message: `Sub-agent ${statusId} not found`,
-                  agentId: statusId,
-                },
-              };
-              ctx.ui.notify(JSON.stringify(notFound, null, 2), "error");
-              return;
-            }
-
-            const targeted = {
-              found: true,
-              agent: buildAgentStatusSnapshot(agent),
-            };
-            ctx.ui.notify(JSON.stringify(targeted, null, 2), "info");
-            return;
-          }
-
-          const status = {
-            summary: buildStatusSummary(),
-            agents: Array.from(activeAgents.values()).map((agent) =>
-              buildCompactAgentStatusSnapshot(agent),
-            ),
-          };
-          ctx.ui.notify(JSON.stringify(status, null, 2), "info");
-          return;
-        }
-
         case "steer": {
           const targetId = rest[0];
           const text = rest.slice(1).join(" ");
@@ -1858,48 +1662,9 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("Killed all sub-agents", "info");
           break;
 
-        case "show":
-          if (!subArgs) {
-            // No ID provided, watch all
-            watchAllMode = true;
-            for (const [id] of activeAgents) {
-              watchedAgentIds.add(id);
-            }
-            updateWatchWidget();
-            ctx.ui.notify("Watching all sub-agents", "info");
-            return;
-          }
-          // Watching specific agent, disable watch-all mode and clear existing
-          watchAllMode = false;
-          watchedAgentIds.clear();
-          if (!activeAgents.has(subArgs)) {
-            ctx.ui.notify(`Sub-agent ${subArgs} not found`, "error");
-            return;
-          }
-          watchedAgentIds.add(subArgs);
-          updateWatchWidget();
-          ctx.ui.notify(`Now watching sub-agent ${subArgs}`, "info");
-          break;
-
-        case "hide":
-          if (!subArgs) {
-            // No ID provided, hide all
-            watchAllMode = false;
-            watchedAgentIds.clear();
-            updateWatchWidget();
-            ctx.ui.notify("Stopped watching all sub-agents", "info");
-            return;
-          }
-          // Hiding specific agent, disable watch-all mode
-          watchAllMode = false;
-          watchedAgentIds.delete(subArgs);
-          updateWatchWidget();
-          ctx.ui.notify(`Stopped watching sub-agent ${subArgs}`, "info");
-          break;
-
         default:
           ctx.ui.notify(
-            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task> | fleet|status|steer|kill|killall|show|hide",
+            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task> | fleet|steer|kill|killall",
             "error",
           );
       }
@@ -2347,10 +2112,6 @@ export default function (pi: ExtensionAPI) {
       activeAgents.clear();
       recentFleetAgents.clear();
       updateSubAgentStatus();
-      // Clear watch list, widget, and watch-all mode
-      watchedAgentIds.clear();
-      watchAllMode = false;
-      updateWatchWidget();
     }
   });
 }
@@ -2363,16 +2124,9 @@ export const __test = {
     }
     activeAgents.clear();
     recentFleetAgents.clear();
-    watchedAgentIds.clear();
-    watchAllMode = false;
     nextAgentId = 1;
     defaultTimeoutSeconds = 180;
     sendCompletionMessage = null;
-    if (watchWidgetUpdateHandle) {
-      clearTimeout(watchWidgetUpdateHandle);
-      watchWidgetUpdateHandle = undefined;
-    }
-    lastWatchWidgetUpdateAt = 0;
   },
 
   extractAssistantMessageText,

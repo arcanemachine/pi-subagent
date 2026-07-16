@@ -9,7 +9,6 @@ A pi extension that enables spawning sub-agents via RPC for parallel task execut
 - Manage multiple concurrent sub-agents
 - Track status and output of running sub-agents
 - Interactive live window for inspecting and steering sub-agents
-- Live widget to watch sub-agent activity in real-time
 - Automatic child-process cleanup after completion, session shutdown, and `/new`
 - Bounded in-memory activity history for long-running sub-agents
 
@@ -49,12 +48,9 @@ ln -s /path/to/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 
 - `/subagent spawn:<agent> <task>` - Spawn a new sub-agent using configured agent type
 - `/subagent fleet` - Open the interactive live sub-agent window
-- `/subagent status [id]` - View structured live status for one/all active sub-agents
 - `/subagent steer <id|all> <text>` - Send follow-up guidance to one or every running sub-agent
 - `/subagent kill <id>` - Kill a specific sub-agent
 - `/subagent killall` - Kill all sub-agents
-- `/subagent show [id]` - Watch sub-agent(s) in widget (no ID = all)
-- `/subagent hide [id]` - Stop watching sub-agent(s) (no ID = all)
 
 ### Tools
 
@@ -131,29 +127,6 @@ Use `/subagent fleet` to open a live window showing all running sub-agents as si
 Press `x` to stop the selected running sub-agent or `X` to stop all running sub-agents. Stopped sessions remain in the fleet. Press `r` to remove the selected finished session or `R` to remove all finished sessions. Lifecycle actions require Enter, `Y`, or `y` to confirm; Escape cancels. Here, “running” includes starting and running statuses, while “finished” includes completed, errored, and stopped statuses.
 
 The window refreshes automatically and reads from bounded activity buffers. Finished sessions remain individually selectable and use status icons; only the 20 most recent finished sessions are retained, without keeping their child processes alive.
-
-### Live Widget
-
-Use `/subagent show` to watch sub-agents in a live-updating widget above the editor:
-
-```
-👁 Watching Sub-Agents
-────────────────────────────────────────
-⏳ abc1234 (running) | 15s
-Task: analyze codebase...
-🔧 bash({"command":"ls -la"})
-────────────────────────────────────────
-```
-
-The widget shows:
-
-- Status icon (⏳ running / ✓ completed / ✗ error)
-- Duration
-- Task description
-- Current tool / last action (if running)
-- Optional progress hints when sub-agents self-report percentages (for example, "50%")
-
-Completed agents are removed from the widget after their completion message is delivered.
 
 ## Development
 
