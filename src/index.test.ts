@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import extension, { __test } from "./index";
+import {
+  SubagentFleetComponent,
+  type FleetAgentDetail,
+  type FleetDataSource,
+} from "./fleet";
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -271,6 +277,27 @@ test("completion closes child stdin and removes it from tracking", () => {
   assert.equal(endCalls, 1);
 });
 
+test("completed fleet sessions are retained with a bounded history", () => {
+  __test.resetState();
+  const source = __test.createFleetDataSource();
+
+  for (let index = 0; index < 21; index++) {
+    const agent = __test.addMockAgent(`T-recent-${index}`, {
+      processExited: true,
+      completionResult: `result ${index}`,
+      startTime: Date.now() + index,
+    });
+    __test.settleSubAgent(agent, "finished");
+  }
+
+  const retained = source.listAgents();
+  assert.equal(retained.length, 20);
+  assert.ok(!retained.some((agent) => agent.id === "T-recent-0"));
+  assert.equal(retained[0]?.id, "T-recent-20");
+  assert.equal(retained[0]?.status, "completed");
+  assert.equal(source.getAgent("T-recent-20")?.task, "test task");
+});
+
 test("child-only completion tool submits one result and requests shutdown", async () => {
   __test.resetState();
   const previousChild = process.env.PI_SUBAGENT_CHILD;
@@ -368,4 +395,107 @@ test("completion details retain timeout metadata", async () => {
   const completion = sent.find((message) => message.details?.result);
   assert.equal(completion?.details?.timedOut, true);
   assert.equal(completion?.details?.timeoutSeconds, 1);
+});
+
+test("fleet window renders bounded live details and steers the selected agent", () => {
+  const now = Date.now();
+  const agents: FleetAgentDetail[] = [
+    {
+      id: "agent-one",
+      agentType: "researcher",
+      model: "provider/researcher",
+      status: "completed",
+      taskTitle: "research task",
+      task: "Research the implementation",
+      startTime: now - 5000,
+      endTime: now - 1000,
+      activity: ["🔧 read({path: src/index.ts})"],
+      currentResponsePreview: "Reviewing the current implementation",
+    },
+    {
+      id: "agent-two",
+      agentType: "reviewer",
+      model: "provider/reviewer",
+      status: "running",
+      taskTitle: "review task",
+      task: "Review the changes",
+      startTime: now - 3000,
+      activity: ["🔧 grep({pattern: fleet})"],
+      currentResponsePreview: "Checking edge cases",
+    },
+  ];
+  const steers: Array<{ id: string; text: string }> = [];
+  const source: FleetDataSource = {
+    listAgents: () =>
+      agents.map(
+        ({ activity, currentResponsePreview, task, ...agent }) => agent,
+      ),
+    getAgent: (id) => agents.find((agent) => agent.id === id),
+    steer: (id, text) => {
+      steers.push({ id, text });
+      return { ok: true, message: `Guidance sent to ${id}.` };
+    },
+  };
+  let closed = false;
+  let renderRequests = 0;
+  const tui = {
+    terminal: { rows: 24, columns: 90 },
+    requestRender: () => renderRequests++,
+  };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  const component = new SubagentFleetComponent(
+    tui as never,
+    theme as never,
+    source,
+    () => {
+      closed = true;
+    },
+    60_000,
+  );
+
+  try {
+    component.focused = true;
+    let lines = component.render(90);
+    assert.ok(
+      lines.some((line) => line.includes("Research the implementation")),
+    );
+    assert.ok(lines.some((line) => line.includes("Reviewing the current")));
+    assert.ok(lines.some((line) => line.includes("(done)")));
+    assert.ok(lines.every((line) => visibleWidth(line) <= 90));
+
+    component.handleInput("s");
+    assert.ok(
+      component
+        .render(90)
+        .some((line) => line.includes("Finished sub-agents cannot be steered")),
+    );
+
+    component.handleInput("\x1b[B");
+    lines = component.render(90);
+    assert.ok(lines.some((line) => line.includes("Review the changes")));
+
+    component.handleInput("s");
+    for (const char of "Focus on lifecycle cleanup")
+      component.handleInput(char);
+    component.handleInput("\r");
+
+    assert.deepEqual(steers, [
+      { id: "agent-two", text: "Focus on lifecycle cleanup" },
+    ]);
+    assert.ok(
+      component.render(90).some((line) => line.includes("Guidance sent")),
+    );
+    assert.ok(renderRequests > 0);
+
+    tui.terminal.rows = 12;
+    assert.ok(component.render(90).length <= 9);
+    component.handleInput("\x1b");
+    assert.equal(closed, true);
+  } finally {
+    component.dispose();
+  }
 });

@@ -8,6 +8,12 @@ import { Box, Markdown, type Component, Text } from "@earendil-works/pi-tui";
 import { spawn, ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  openSubagentFleet,
+  type FleetAgentDetail,
+  type FleetAgentSummary,
+  type FleetDataSource,
+} from "./fleet";
 
 interface SubAgent {
   id: string;
@@ -55,6 +61,7 @@ interface SubAgent {
 }
 
 const activeAgents = new Map<string, SubAgent>();
+const recentFleetAgents = new Map<string, FleetAgentDetail>();
 let currentCtx: ExtensionContext | null = null;
 let watchedAgentIds: Set<string> = new Set();
 let nextAgentId = 1;
@@ -76,6 +83,7 @@ const MAX_DEFAULT_TIMEOUT_SECONDS = 86400;
 const MAX_ACTIVITY_ENTRIES = 50;
 const MAX_ACTIVITY_ENTRY_CHARS = 1000;
 const MAX_RESPONSE_PREVIEW_CHARS = 4000;
+const MAX_RECENT_FLEET_AGENTS = 20;
 const PROCESS_SHUTDOWN_GRACE_MS = 2000;
 const TIMEOUT_WRAP_UP_WARNING_SECONDS = 60;
 const WATCH_WIDGET_UPDATE_INTERVAL_MS = 250;
@@ -476,7 +484,25 @@ function requestProcessShutdown(agent: SubAgent): void {
   agent.shutdownHandle.unref?.();
 }
 
+function rememberAgentForFleet(agent: SubAgent): void {
+  if (!isAgentFinished(agent)) return;
+
+  recentFleetAgents.delete(agent.id);
+  recentFleetAgents.set(agent.id, {
+    ...toFleetAgentDetail(agent),
+    activity: [...agent.activity],
+    currentResponsePreview: "",
+  });
+  while (recentFleetAgents.size > MAX_RECENT_FLEET_AGENTS) {
+    const oldestId = recentFleetAgents.keys().next().value;
+    if (oldestId === undefined) break;
+    recentFleetAgents.delete(oldestId);
+  }
+}
+
 function removeAgentFromTracking(id: string): void {
+  const agent = activeAgents.get(id);
+  if (agent) rememberAgentForFleet(agent);
   activeAgents.delete(id);
   watchedAgentIds.delete(id);
   updateSubAgentStatus();
@@ -1261,6 +1287,62 @@ function notifySubAgent(
   return { ok: true };
 }
 
+function toFleetAgentSummary(agent: SubAgent): FleetAgentSummary {
+  return {
+    id: agent.id,
+    agentType: agent.agentType,
+    model: agent.model,
+    status: agent.status,
+    taskTitle: agent.taskTitle,
+    startTime: agent.startTime,
+    endTime: agent.endTime,
+    currentTool: agent.currentTool,
+    lastAction: agent.lastAction,
+    progressPercent: agent.progressPercent,
+  };
+}
+
+function toFleetAgentDetail(agent: SubAgent): FleetAgentDetail {
+  return {
+    ...toFleetAgentSummary(agent),
+    task: agent.task,
+    activity: agent.activity,
+    currentResponsePreview: agent.currentResponsePreview,
+    timeoutSeconds: agent.timeoutSeconds,
+    timeoutAt: agent.timeoutAt,
+  };
+}
+
+function createFleetDataSource(): FleetDataSource {
+  return {
+    listAgents: () =>
+      [
+        ...Array.from(activeAgents.values()).map(toFleetAgentSummary),
+        ...recentFleetAgents.values(),
+      ].sort((left, right) => right.startTime - left.startTime),
+    getAgent: (id) => {
+      const agent = activeAgents.get(id);
+      return agent ? toFleetAgentDetail(agent) : recentFleetAgents.get(id);
+    },
+    steer: (id, text) => {
+      const result = notifySubAgent(id, text);
+      if (result.ok) {
+        return { ok: true, message: `Guidance sent to ${id}.` };
+      }
+
+      const message =
+        result.reason === "already_finished"
+          ? `${id} already finished.`
+          : result.reason === "stdin_unavailable"
+            ? `${id} cannot receive guidance right now.`
+            : result.reason === "empty_message"
+              ? "Guidance cannot be empty."
+              : `${id} is no longer running.`;
+      return { ok: false, message };
+    },
+  };
+}
+
 type MessageContent = string | Array<{ type: string; text?: string }>;
 
 /**
@@ -1360,6 +1442,9 @@ export default function (pi: ExtensionAPI) {
     return;
   }
 
+  let fleetOpen = false;
+  const fleetDataSource = createFleetDataSource();
+
   sendCompletionMessage = (
     content: string,
     details?: Record<string, unknown>,
@@ -1440,6 +1525,7 @@ export default function (pi: ExtensionAPI) {
           label:
             "status [id] — Show current structured status (do NOT use for routine polling)",
         },
+        { value: "fleet", label: "fleet — Open the live sub-agent window" },
         { value: "kill", label: "kill <id> — Kill a specific sub-agent" },
         { value: "killall", label: "killall — Kill all sub-agents" },
         { value: "show", label: "show [id] — Watch sub-agent (no ID = all)" },
@@ -1476,7 +1562,7 @@ export default function (pi: ExtensionAPI) {
       const trimmedArgs = args.trim();
       if (!trimmedArgs) {
         ctx.ui.notify(
-          "Usage: /subagent spawn:<agent>|status|notify|kill|killall|show|hide",
+          "Usage: /subagent spawn:<agent>|fleet|status|notify|kill|killall|show|hide",
           "error",
         );
         return;
@@ -1558,6 +1644,24 @@ export default function (pi: ExtensionAPI) {
       }
 
       switch (subcommand) {
+        case "fleet": {
+          if (!ctx.hasUI) {
+            return;
+          }
+          if (fleetOpen) {
+            ctx.ui.notify("The sub-agent window is already open.", "info");
+            return;
+          }
+
+          fleetOpen = true;
+          try {
+            await openSubagentFleet(ctx, fleetDataSource);
+          } finally {
+            fleetOpen = false;
+          }
+          return;
+        }
+
         case "status": {
           const statusId = rest[0];
 
@@ -1703,7 +1807,7 @@ export default function (pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task> | status|notify|kill|killall|show|hide",
+            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task> | fleet|status|notify|kill|killall|show|hide",
             "error",
           );
       }
@@ -2131,6 +2235,7 @@ export default function (pi: ExtensionAPI) {
         terminateSubAgentWithoutNotification(agent, "interrupted by /new");
       }
       activeAgents.clear();
+      recentFleetAgents.clear();
       updateSubAgentStatus();
       // Clear watch list, widget, and watch-all mode
       watchedAgentIds.clear();
@@ -2147,6 +2252,7 @@ export const __test = {
       clearSubAgentShutdown(agent);
     }
     activeAgents.clear();
+    recentFleetAgents.clear();
     watchedAgentIds.clear();
     watchAllMode = false;
     nextAgentId = 1;
@@ -2217,4 +2323,5 @@ export const __test = {
 
   scheduleSubAgentTimeout,
   notifyAgentCompletion,
+  createFleetDataSource,
 };

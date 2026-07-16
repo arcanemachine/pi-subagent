@@ -8,6 +8,7 @@ A pi extension that enables spawning sub-agents via RPC for parallel task execut
 - Fire-and-forget sub-agents with automatic completion messages
 - Manage multiple concurrent sub-agents
 - Track status and output of running sub-agents
+- Interactive live window for inspecting and steering sub-agents
 - Live widget to watch sub-agent activity in real-time
 - Automatic child-process cleanup after completion, session shutdown, and `/new`
 - Bounded in-memory activity history for long-running sub-agents
@@ -47,6 +48,7 @@ ln -s /path/to/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 ### Commands
 
 - `/subagent spawn:<agent> <task>` - Spawn a new sub-agent using configured agent type
+- `/subagent fleet` - Open the interactive live sub-agent window
 - `/subagent status [id]` - View structured live status for one/all active sub-agents
 - `/subagent notify <id> <text>` - Send follow-up guidance to a running sub-agent
 - `/subagent kill <id>` - Kill a specific sub-agent
@@ -121,6 +123,12 @@ Project settings override global settings by agent key. `max_active_subagents` i
 `default_timeout_seconds` controls an automatic timeout notification for each spawned sub-agent. When the timeout is reached, the parent sends guidance asking the sub-agent to report progress so far and finish up. The default is 180 seconds.
 
 `allow_nested_subagents` controls whether spawned sub-agents can use this extension's own sub-agent tools. Default is `false` (nested sub-agents disabled). Set to `true` only if you explicitly want recursive fan-out.
+
+### Interactive Window
+
+Use `/subagent fleet` to open a live window showing all running sub-agents as simplified mini Pi sessions. Select an agent with `↑`/`↓` or `j`/`k`, press `s` to enter guidance, and press Enter to steer it. Page Up/Page Down scroll the selected session; Escape closes the window.
+
+The window refreshes automatically and reads from bounded activity buffers. Finished sessions remain individually selectable and are marked `(done)`; only the 20 most recent finished sessions are retained, without keeping their child processes alive.
 
 ### Live Widget
 
