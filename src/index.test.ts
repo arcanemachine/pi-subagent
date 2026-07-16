@@ -794,6 +794,12 @@ test("fleet action rows wrap and include same-color spacing", () => {
       ),
       "every action line should fill the same background width",
     );
+    assert.ok(
+      toolBackgrounds
+        .filter((line) => line.trim())
+        .every((line) => line.startsWith("  ") && line.endsWith("  ")),
+      "wrapped action text should have two columns of side padding",
+    );
   } finally {
     component.dispose();
   }

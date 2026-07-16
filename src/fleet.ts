@@ -433,12 +433,17 @@ export class SubagentFleetComponent implements Component, Focusable {
     const toolName = match?.[1]?.trim() ?? "tool";
     const args = match?.[2]?.trim() ?? "";
     const content =
-      ` ${this.theme.fg("toolTitle", this.theme.bold(toolName))}` +
+      this.theme.fg("toolTitle", this.theme.bold(toolName)) +
       (args ? ` ${this.theme.fg("toolOutput", args)}` : "");
     const background = pending ? "toolPendingBg" : "toolSuccessBg";
+    const horizontalPadding = 2;
+    const contentWidth = Math.max(1, width - horizontalPadding * 2);
     const topBlank = this.theme.bg(background, fit("", width));
-    const contentLines = this.wrapLines(content, width).map((line) =>
-      this.theme.bg(background, fit(line, width)),
+    const contentLines = this.wrapLines(content, contentWidth).map((line) =>
+      this.theme.bg(
+        background,
+        fit(`${" ".repeat(horizontalPadding)}${line}`, width),
+      ),
     );
     const bottomBlank = this.theme.bg(background, fit("", width));
     return [topBlank, ...contentLines, bottomBlank];
