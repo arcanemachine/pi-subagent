@@ -128,6 +128,8 @@ Project settings override global settings by agent key. `max_active_subagents` i
 
 Use `/subagent fleet` to open a live window showing all running sub-agents as simplified mini Pi sessions. Select an agent with `↑`/`↓` or `j`/`k`, press `s` to enter guidance, and press Enter to steer it. Page Up/Page Down scroll the selected session; Escape closes the window.
 
+Press `x` to stop the selected running sub-agent or `X` to stop all running sub-agents. Stopped sessions remain in the fleet. Press `r` to remove the selected finished session or `R` to remove all finished sessions. Lifecycle actions require Enter, `Y`, or `y` to confirm; Escape cancels. Here, “running” includes starting and running statuses, while “finished” includes completed, errored, and stopped statuses.
+
 The window refreshes automatically and reads from bounded activity buffers. Finished sessions remain individually selectable and use status icons; only the 20 most recent finished sessions are retained, without keeping their child processes alive.
 
 ### Live Widget
