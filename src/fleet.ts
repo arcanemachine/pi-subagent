@@ -46,6 +46,8 @@ export interface FleetDataSource {
   steer(id: string, text: string): FleetActionResult;
   remove(id: string): FleetActionResult;
   removeAllFinished(): FleetActionResult;
+  stop(id: string): FleetActionResult;
+  stopAllRunning(): FleetActionResult;
 }
 
 function fit(text: string, width: number): string {
@@ -100,6 +102,8 @@ export class SubagentFleetComponent implements Component, Focusable {
   private confirmAction:
     | { kind: "remove-selected"; targetId: string }
     | { kind: "remove-all" }
+    | { kind: "stop-selected"; targetId: string }
+    | { kind: "stop-all" }
     | undefined;
   private feedback = "";
   private disposed = false;
@@ -246,6 +250,28 @@ export class SubagentFleetComponent implements Component, Focusable {
     this.tui.requestRender();
   }
 
+  private beginStopSelected(): void {
+    const selected = this.agents[this.selected];
+    if (!isSteerable(selected)) return;
+
+    this.mode = "confirm";
+    this.confirmAction = {
+      kind: "stop-selected",
+      targetId: selected!.id,
+    };
+    this.feedback = "";
+    this.tui.requestRender();
+  }
+
+  private beginStopAll(): void {
+    if (!this.agents.some(isSteerable)) return;
+
+    this.mode = "confirm";
+    this.confirmAction = { kind: "stop-all" };
+    this.feedback = "";
+    this.tui.requestRender();
+  }
+
   private cancelConfirmation(): void {
     this.mode = "browse";
     this.confirmAction = undefined;
@@ -262,7 +288,11 @@ export class SubagentFleetComponent implements Component, Focusable {
     const result =
       action.kind === "remove-selected"
         ? this.source.remove(action.targetId)
-        : this.source.removeAllFinished();
+        : action.kind === "remove-all"
+          ? this.source.removeAllFinished()
+          : action.kind === "stop-selected"
+            ? this.source.stop(action.targetId)
+            : this.source.stopAllRunning();
     this.mode = "browse";
     this.confirmAction = undefined;
     this.feedback = result.message;
@@ -335,6 +365,14 @@ export class SubagentFleetComponent implements Component, Focusable {
     }
     if (data === "R") {
       this.beginRemoveAll();
+      return;
+    }
+    if (matchesKey(data, "x")) {
+      this.beginStopSelected();
+      return;
+    }
+    if (data === "X") {
+      this.beginStopAll();
     }
   }
 
@@ -508,7 +546,11 @@ export class SubagentFleetComponent implements Component, Focusable {
     const message =
       action?.kind === "remove-all"
         ? "Remove ALL finished subagents?"
-        : "Remove the selected subagent?";
+        : action?.kind === "stop-selected"
+          ? "Stop this running subagent?"
+          : action?.kind === "stop-all"
+            ? "Stop ALL running subagents?"
+            : "Remove the selected subagent?";
     const innerWidth = Math.max(1, width - 2);
     const border = (text: string) => this.theme.fg("border", text);
     return [
@@ -615,8 +657,8 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.mode === "steer"
         ? " Enter send · Esc cancel"
         : this.feedback
-          ? ` ${this.feedback} · ↑↓ agents · s steer · r remove · Esc close`
-          : ` ↑↓/jk agent · PgUp/PgDn session · s steer · r/R remove · Esc close · ${position}`;
+          ? ` ${this.feedback} · ↑↓ agents · s steer · r remove · x stop · Esc close`
+          : ` ↑↓/jk agent · PgUp/PgDn session · s steer · r/R remove · x/X stop · Esc close · ${position}`;
     lines.push(
       border("│") + fit(this.theme.fg("dim", footer), innerWidth) + border("│"),
     );

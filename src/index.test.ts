@@ -306,6 +306,21 @@ test("completed fleet sessions are retained with a bounded history", () => {
   assert.equal(source.listAgents().length, 0);
 });
 
+test("fleet stop actions terminate active agents but retain their sessions", () => {
+  __test.resetState();
+  const source = __test.createFleetDataSource();
+  __test.addMockAgent("T-stop-one");
+  __test.addMockAgent("T-stop-two");
+
+  assert.equal(source.stop("T-stop-one").ok, true);
+  assert.equal(source.getAgent("T-stop-one")?.status, "interrupted");
+  assert.ok(source.listAgents().some((agent) => agent.id === "T-stop-one"));
+
+  assert.equal(source.stopAllRunning().message, "Stopped 1 running sub-agent.");
+  assert.equal(source.getAgent("T-stop-two")?.status, "interrupted");
+  assert.equal(source.listAgents().length, 2);
+});
+
 test("child-only completion tool submits one result and requests shutdown", async () => {
   __test.resetState();
   const previousChild = process.env.PI_SUBAGENT_CHILD;
@@ -445,6 +460,8 @@ test("fleet window renders bounded live details and steers the selected agent", 
     },
     remove: (id) => ({ ok: true, message: `Removed ${id}.` }),
     removeAllFinished: () => ({ ok: true, message: "Removed all." }),
+    stop: (id) => ({ ok: true, message: `Stopped ${id}.` }),
+    stopAllRunning: () => ({ ok: true, message: "Stopped all." }),
   };
   let closed = false;
   let renderRequests = 0;
@@ -567,6 +584,8 @@ test("fleet window confirms removal of selected and all finished sessions", () =
         message: `Removed ${count} finished sub-agents.`,
       };
     },
+    stop: (id) => ({ ok: true, message: `Stopped ${id}.` }),
+    stopAllRunning: () => ({ ok: true, message: "Stopped all." }),
   };
   const component = new SubagentFleetComponent(
     { terminal: { rows: 24, columns: 90 }, requestRender() {} } as never,
@@ -607,6 +626,123 @@ test("fleet window confirms removal of selected and all finished sessions", () =
     assert.deepEqual(
       agents.map((agent) => agent.id),
       ["running-one"],
+    );
+  } finally {
+    component.dispose();
+  }
+});
+
+test("fleet stop actions preserve stopped sessions and require confirmation", () => {
+  const now = Date.now();
+  const agents: FleetAgentDetail[] = [
+    {
+      id: "running-one",
+      status: "running",
+      taskTitle: "first running task",
+      task: "First running task",
+      startTime: now - 3000,
+      activity: [],
+      currentResponsePreview: "",
+    },
+    {
+      id: "running-two",
+      status: "starting",
+      taskTitle: "second running task",
+      task: "Second running task",
+      startTime: now - 2000,
+      activity: [],
+      currentResponsePreview: "",
+    },
+    {
+      id: "finished-one",
+      status: "completed",
+      taskTitle: "finished task",
+      task: "Finished task",
+      startTime: now - 1000,
+      endTime: now,
+      activity: [],
+      currentResponsePreview: "",
+    },
+  ];
+  const stopped: string[] = [];
+  const stopAgent = (id: string) => {
+    const agent = agents.find((candidate) => candidate.id === id);
+    if (!agent || (agent.status !== "starting" && agent.status !== "running")) {
+      return { ok: false, message: `${id} is no longer running.` };
+    }
+    agent.status = "interrupted";
+    agent.endTime = Date.now();
+    stopped.push(id);
+    return { ok: true, message: `Stopped sub-agent ${id}.` };
+  };
+  const source: FleetDataSource = {
+    listAgents: () =>
+      agents.map(
+        ({ task, activity, currentResponsePreview, ...agent }) => agent,
+      ),
+    getAgent: (id) => agents.find((agent) => agent.id === id),
+    steer: () => ({ ok: true, message: "Guidance sent." }),
+    remove: () => ({ ok: true, message: "Removed." }),
+    removeAllFinished: () => ({ ok: true, message: "Removed all." }),
+    stop: stopAgent,
+    stopAllRunning: () => {
+      const runningIds = agents
+        .filter(
+          (agent) => agent.status === "starting" || agent.status === "running",
+        )
+        .map((agent) => agent.id);
+      for (const id of runningIds) stopAgent(id);
+      return {
+        ok: true,
+        message: `Stopped ${runningIds.length} running sub-agents.`,
+      };
+    },
+  };
+  const component = new SubagentFleetComponent(
+    { terminal: { rows: 24, columns: 90 }, requestRender() {} } as never,
+    {
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as never,
+    source,
+    () => {},
+    60_000,
+  );
+
+  try {
+    component.handleInput("x");
+    assert.ok(
+      component
+        .render(90)
+        .some((line) => line.includes("Stop this running subagent?")),
+    );
+    component.handleInput("\x1b");
+    assert.deepEqual(stopped, []);
+
+    component.handleInput("x");
+    component.handleInput("\r");
+    assert.deepEqual(stopped, ["running-one"]);
+    assert.equal(agents[0]?.status, "interrupted");
+    assert.equal(agents.length, 3, "stopping must retain the session");
+
+    component.handleInput("X");
+    assert.ok(
+      component
+        .render(90)
+        .some((line) => line.includes("Stop ALL running subagents?")),
+    );
+    component.handleInput("y");
+    assert.deepEqual(stopped, ["running-one", "running-two"]);
+    assert.equal(agents[1]?.status, "interrupted");
+    assert.equal(agents.length, 3, "stop all must retain finished sessions");
+
+    component.handleInput("x");
+    assert.ok(
+      !component
+        .render(90)
+        .some((line) => line.includes("Stop this running subagent?")),
+      "x must be ignored for a finished selection",
     );
   } finally {
     component.dispose();

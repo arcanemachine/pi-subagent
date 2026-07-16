@@ -1354,6 +1354,23 @@ function createFleetDataSource(): FleetDataSource {
         message: `Removed ${count} finished sub-agent${count === 1 ? "" : "s"}.`,
       };
     },
+    stop: (id) => {
+      const result = killSubAgent(id);
+      if (!result.ok) {
+        return { ok: false, message: `${id} is no longer running.` };
+      }
+      return { ok: true, message: `Stopped sub-agent ${id}.` };
+    },
+    stopAllRunning: () => {
+      let count = 0;
+      for (const id of Array.from(activeAgents.keys())) {
+        if (killSubAgent(id).ok) count++;
+      }
+      return {
+        ok: true,
+        message: `Stopped ${count} running sub-agent${count === 1 ? "" : "s"}.`,
+      };
+    },
   };
 }
 
