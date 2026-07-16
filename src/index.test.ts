@@ -679,11 +679,18 @@ test("fleet window confirms removal of selected and all finished sessions", () =
 
   try {
     component.handleInput("r");
+    const removalConfirmation = component.render(90);
     assert.ok(
-      component
-        .render(90)
-        .some((line) => line.includes("Remove the selected subagent?")),
+      removalConfirmation.some((line) =>
+        line.includes("Remove the selected subagent?"),
+      ),
     );
+    const confirmationBorder = removalConfirmation.find((line) =>
+      line.includes("╭"),
+    );
+    assert.equal(visibleWidth(confirmationBorder?.trim() ?? ""), 60);
+    assert.equal(confirmationBorder?.indexOf("╭"), 15);
+    assert.ok(removalConfirmation.every((line) => visibleWidth(line) <= 90));
     component.handleInput("\x1b");
     assert.equal(agents.length, 3);
 

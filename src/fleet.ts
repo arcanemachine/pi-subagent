@@ -562,18 +562,25 @@ export class SubagentFleetComponent implements Component, Focusable {
           : action?.kind === "stop-all"
             ? "Stop ALL running subagents?"
             : "Remove the selected subagent?";
-    const innerWidth = Math.max(1, width - 2);
+    const popupWidth = Math.min(60, width);
+    const innerWidth = Math.max(1, popupWidth - 2);
+    const leftPadding = Math.floor((width - popupWidth) / 2);
+    const rightPadding = Math.max(0, width - popupWidth - leftPadding);
     const border = (text: string) => this.theme.fg("border", text);
+    const center = (line: string) =>
+      `${" ".repeat(leftPadding)}${line}${" ".repeat(rightPadding)}`;
     return [
-      border(`╭${"─".repeat(innerWidth)}╮`),
-      border("│") + fit(` ${message}`, innerWidth) + border("│"),
-      border("│") +
-        fit(
-          this.theme.fg("dim", " Enter/Y/y confirm · Esc cancel"),
-          innerWidth,
-        ) +
-        border("│"),
-      border(`╰${"─".repeat(innerWidth)}╯`),
+      center(border(`╭${"─".repeat(innerWidth)}╮`)),
+      center(border("│") + fit(` ${message}`, innerWidth) + border("│")),
+      center(
+        border("│") +
+          fit(
+            this.theme.fg("dim", " Enter/Y/y confirm · Esc cancel"),
+            innerWidth,
+          ) +
+          border("│"),
+      ),
+      center(border(`╰${"─".repeat(innerWidth)}╯`)),
     ];
   }
 
