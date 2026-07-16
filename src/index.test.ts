@@ -826,6 +826,57 @@ test("fleet action rows wrap and include same-color spacing", () => {
   }
 });
 
+test("fleet page keys scroll detail by three lines", () => {
+  const agent: FleetAgentDetail = {
+    id: "scrolling-agent",
+    status: "running",
+    taskTitle: "scroll task",
+    task: "Scroll through activity",
+    startTime: Date.now() - 1000,
+    activity: Array.from(
+      { length: 20 },
+      (_, index) => `activity-${String(index).padStart(2, "0")}`,
+    ),
+    currentResponsePreview: "",
+  };
+  const component = new SubagentFleetComponent(
+    { terminal: { rows: 24, columns: 90 }, requestRender() {} } as never,
+    {
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as never,
+    {
+      listAgents: () => [agent],
+      getAgent: () => agent,
+      steer: () => ({ ok: true, message: "Guidance sent." }),
+      remove: () => ({ ok: true, message: "Removed." }),
+      removeAllFinished: () => ({ ok: true, message: "Removed all." }),
+      stop: () => ({ ok: true, message: "Stopped." }),
+      stopAllRunning: () => ({ ok: true, message: "Stopped all." }),
+    },
+    () => {},
+    60_000,
+  );
+  const visibleDetails = () =>
+    component
+      .render(90)
+      .slice(3, 16)
+      .map((line) => line.split("│")[2] ?? "");
+
+  try {
+    const initial = visibleDetails();
+    component.handleInput("\x1b[5~");
+    const scrolledUp = visibleDetails();
+    assert.deepEqual(scrolledUp.slice(3), initial.slice(0, -3));
+
+    component.handleInput("\x1b[6~");
+    assert.deepEqual(visibleDetails(), initial);
+  } finally {
+    component.dispose();
+  }
+});
+
 test("fleet stop actions preserve stopped sessions and require confirmation", () => {
   const now = Date.now();
   const agents: FleetAgentDetail[] = [

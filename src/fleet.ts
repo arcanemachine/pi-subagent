@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 const DEFAULT_REFRESH_MS = 500;
+const DETAIL_SCROLL_STEP = 3;
 
 type Theme = ExtensionContext["ui"]["theme"];
 
@@ -341,7 +342,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     }
     if (matchesKey(data, "pageUp")) {
       this.detailAutoFollow = false;
-      this.detailScroll = Math.max(0, this.detailScroll - this.bodyHeight);
+      this.detailScroll = Math.max(0, this.detailScroll - DETAIL_SCROLL_STEP);
       this.tui.requestRender();
       return;
     }
@@ -349,7 +350,7 @@ export class SubagentFleetComponent implements Component, Focusable {
       const maxScroll = Math.max(0, this.detailLineCount - this.bodyHeight);
       this.detailScroll = Math.min(
         maxScroll,
-        this.detailScroll + this.bodyHeight,
+        this.detailScroll + DETAIL_SCROLL_STEP,
       );
       this.detailAutoFollow = this.detailScroll >= maxScroll;
       this.tui.requestRender();
