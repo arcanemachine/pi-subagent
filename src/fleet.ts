@@ -381,29 +381,30 @@ export class SubagentFleetComponent implements Component, Focusable {
       return [this.theme.fg("dim", " No sub-agent sessions")];
     }
 
+    const visibleAgentCount = Math.max(1, Math.ceil(this.bodyHeight / 2));
     const start = Math.max(
       0,
       Math.min(
-        this.selected - this.bodyHeight + 1,
-        Math.max(0, this.agents.length - this.bodyHeight),
+        this.selected - visibleAgentCount + 1,
+        Math.max(0, this.agents.length - visibleAgentCount),
       ),
     );
-    return this.agents
-      .slice(start, start + this.bodyHeight)
-      .map((agent, offset) => {
-        const index = start + offset;
-        const marker =
-          index === this.selected ? this.theme.fg("accent", "›") : " ";
-        const name = agent.agentType ?? "agent";
-        const state =
-          agent.status === "error"
-            ? "(error)"
-            : agent.status === "interrupted"
-              ? "(stopped)"
-              : formatDuration(agent);
-        const left = `${marker} ${statusGlyph(agent, this.theme)} ${agent.id} ${name}`;
-        return rightAligned(left, this.theme.fg("dim", state), width);
-      });
+    const visibleAgents = this.agents.slice(start, start + visibleAgentCount);
+    return visibleAgents.flatMap((agent, offset) => {
+      const index = start + offset;
+      const marker =
+        index === this.selected ? this.theme.fg("accent", "›") : " ";
+      const name = agent.agentType ?? "agent";
+      const state =
+        agent.status === "error"
+          ? "(error)"
+          : agent.status === "interrupted"
+            ? "(stopped)"
+            : formatDuration(agent);
+      const left = `${marker} ${statusGlyph(agent, this.theme)} ${agent.id} ${name}`;
+      const line = rightAligned(left, this.theme.fg("dim", state), width);
+      return offset < visibleAgents.length - 1 ? [line, ""] : [line];
+    });
   }
 
   private wrapLines(text: string, width: number): string[] {

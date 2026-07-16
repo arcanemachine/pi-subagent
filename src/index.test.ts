@@ -568,6 +568,14 @@ test("fleet window renders bounded live details and steers the selected agent", 
     assert.ok(lines.some((line) => line.includes("Reviewing the current")));
     assert.ok(lines.every((line) => !line.includes("(done)")));
     assert.ok(lines.every((line) => visibleWidth(line) <= 90));
+    const firstRosterRow = lines.findIndex((line) =>
+      line.includes("agent-one"),
+    );
+    const secondRosterRow = lines.findIndex((line) =>
+      line.includes("agent-two"),
+    );
+    assert.equal(secondRosterRow, firstRosterRow + 2);
+    assert.equal(lines[firstRosterRow + 1]?.split("│")[1]?.trim(), "");
 
     component.handleInput("s");
     assert.ok(
