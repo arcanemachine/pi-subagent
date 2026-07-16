@@ -396,13 +396,11 @@ export class SubagentFleetComponent implements Component, Focusable {
           index === this.selected ? this.theme.fg("accent", "›") : " ";
         const name = agent.agentType ?? "agent";
         const state =
-          agent.status === "completed"
-            ? "(done)"
-            : agent.status === "error"
-              ? "(error)"
-              : agent.status === "interrupted"
-                ? "(stopped)"
-                : formatDuration(agent);
+          agent.status === "error"
+            ? "(error)"
+            : agent.status === "interrupted"
+              ? "(stopped)"
+              : formatDuration(agent);
         const left = `${marker} ${statusGlyph(agent, this.theme)} ${agent.id} ${name}`;
         return rightAligned(left, this.theme.fg("dim", state), width);
       });

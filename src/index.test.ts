@@ -491,7 +491,7 @@ test("fleet window renders bounded live details and steers the selected agent", 
       lines.some((line) => line.includes("Research the implementation")),
     );
     assert.ok(lines.some((line) => line.includes("Reviewing the current")));
-    assert.ok(lines.some((line) => line.includes("(done)")));
+    assert.ok(lines.every((line) => !line.includes("(done)")));
     assert.ok(lines.every((line) => visibleWidth(line) <= 90));
 
     component.handleInput("s");
