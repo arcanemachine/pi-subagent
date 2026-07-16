@@ -321,6 +321,44 @@ test("fleet stop actions terminate active agents but retain their sessions", () 
   assert.equal(source.listAgents().length, 2);
 });
 
+test("registers steer command and tool terminology", async () => {
+  __test.resetState();
+  const tools: any[] = [];
+  const commands: any[] = [];
+  extension({
+    registerTool: (tool: any) => tools.push(tool),
+    registerCommand: (name: string, command: any) =>
+      commands.push({ name, command }),
+    registerMessageRenderer() {},
+    on() {},
+    sendMessage() {},
+  } as any);
+
+  assert.ok(tools.some((tool) => tool.name === "subagent_steer"));
+  assert.ok(!tools.some((tool) => tool.name === "subagent_notify"));
+
+  const subagentCommand = commands.find((entry) => entry.name === "subagent");
+  const completions = subagentCommand.command.getArgumentCompletions("");
+  assert.ok(completions.some((entry: any) => entry.value === "steer"));
+  assert.ok(!completions.some((entry: any) => entry.value === "notify"));
+
+  const agent = __test.addMockAgent("T-steer");
+  const steerTool = tools.find((tool) => tool.name === "subagent_steer");
+  const result = await steerTool.execute(
+    "call-steer",
+    { agent_id: agent.id, text: "Focus on the requested scope" },
+    undefined,
+    undefined,
+    undefined,
+  );
+  assert.equal(result.details.sent, true);
+  assert.ok(
+    agent.activity.some((entry) =>
+      entry.includes("Parent guidance: Focus on the requested scope"),
+    ),
+  );
+});
+
 test("child-only completion tool submits one result and requests shutdown", async () => {
   __test.resetState();
   const previousChild = process.env.PI_SUBAGENT_CHILD;

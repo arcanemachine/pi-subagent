@@ -402,7 +402,7 @@ function scheduleSubAgentTimeout(
         0,
         Math.floor((Date.now() - agent.startTime) / 1000),
       );
-      notifySubAgent(
+      steerSubAgent(
         agent.id,
         `You have been running for ${elapsedSeconds} seconds. You have ${TIMEOUT_WRAP_UP_WARNING_SECONDS} seconds to finish your task.`,
       );
@@ -419,7 +419,7 @@ function scheduleSubAgentTimeout(
     const timeoutText =
       `Time budget reached (${timeoutSeconds}s). ` +
       "Do not continue expanding scope. Submit what you completed and what remains through subagent_complete now.";
-    const result = notifySubAgent(agent.id, timeoutText);
+    const result = steerSubAgent(agent.id, timeoutText);
     if (result.ok) {
       agent.timeoutNotified = true;
       agent.lastAction = `⏰ timeout reached (${timeoutSeconds}s)`;
@@ -431,7 +431,7 @@ function scheduleSubAgentTimeout(
           return;
         }
 
-        notifySubAgent(
+        steerSubAgent(
           agent.id,
           "You are still running past the time budget. Stop now and call subagent_complete immediately with the best result available.",
         );
@@ -1239,7 +1239,7 @@ function killSubAgent(id: string): {
   return { ok: true };
 }
 
-function notifySubAgent(
+function steerSubAgent(
   id: string,
   text: string,
 ): {
@@ -1268,7 +1268,7 @@ function notifySubAgent(
     return { ok: false, reason: "stdin_unavailable" };
   }
 
-  const requestId = `notify-${id}-${Date.now()}`;
+  const requestId = `steer-${id}-${Date.now()}`;
   const steer = JSON.stringify({
     id: requestId,
     type: "steer",
@@ -1325,7 +1325,7 @@ function createFleetDataSource(): FleetDataSource {
       return agent ? toFleetAgentDetail(agent) : recentFleetAgents.get(id);
     },
     steer: (id, text) => {
-      const result = notifySubAgent(id, text);
+      const result = steerSubAgent(id, text);
       if (result.ok) {
         return { ok: true, message: `Guidance sent to ${id}.` };
       }
@@ -1562,8 +1562,8 @@ export default function (pi: ExtensionAPI) {
         { value: "show", label: "show [id] — Watch sub-agent (no ID = all)" },
         { value: "hide", label: "hide [id] — Stop watching (no ID = all)" },
         {
-          value: "notify",
-          label: "notify <id> <text> — Send guidance to a running sub-agent",
+          value: "steer",
+          label: "steer <id> <text> — Send guidance to a running sub-agent",
         },
       ];
 
@@ -1593,7 +1593,7 @@ export default function (pi: ExtensionAPI) {
       const trimmedArgs = args.trim();
       if (!trimmedArgs) {
         ctx.ui.notify(
-          "Usage: /subagent spawn:<agent>|fleet|status|notify|kill|killall|show|hide",
+          "Usage: /subagent spawn:<agent>|fleet|status|steer|kill|killall|show|hide",
           "error",
         );
         return;
@@ -1729,21 +1729,18 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        case "notify": {
+        case "steer": {
           const targetId = rest[0];
           const text = rest.slice(1).join(" ");
 
           if (!targetId || !text.trim()) {
-            ctx.ui.notify("Usage: /subagent notify <id> <text>", "error");
+            ctx.ui.notify("Usage: /subagent steer <id> <text>", "error");
             return;
           }
 
-          const result = notifySubAgent(targetId, text);
+          const result = steerSubAgent(targetId, text);
           if (result.ok) {
-            ctx.ui.notify(
-              `Sent guidance notification to sub-agent ${targetId}`,
-              "info",
-            );
+            ctx.ui.notify(`Sent guidance to sub-agent ${targetId}`, "info");
             return;
           }
 
@@ -1838,7 +1835,7 @@ export default function (pi: ExtensionAPI) {
 
         default:
           ctx.ui.notify(
-            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task> | fleet|status|notify|kill|killall|show|hide",
+            "Usage: /subagent spawn:<agent> [timeout:<seconds>] <task> | fleet|status|steer|kill|killall|show|hide",
             "error",
           );
       }
@@ -2038,10 +2035,10 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // Tool: Send a follow-up notification to a running sub-agent
+  // Tool: Steer a running sub-agent
   pi.registerTool({
-    name: "subagent_notify",
-    label: "Notify Sub-Agent",
+    name: "subagent_steer",
+    label: "Steer Sub-Agent",
     description:
       "Send guidance to a running sub-agent by ID. Use to redirect a sub-agent that is drifting from scope, " +
       "answer a question it asked, or steer it toward finishing. Prefer this over killing and re-spawning " +
@@ -2067,7 +2064,7 @@ export default function (pi: ExtensionAPI) {
       onUpdate,
       ctx,
     ) {
-      const result = notifySubAgent(params.agent_id, params.text);
+      const result = steerSubAgent(params.agent_id, params.text);
 
       if (!result.ok) {
         const message =
@@ -2102,7 +2099,7 @@ export default function (pi: ExtensionAPI) {
           {
             type: "text",
             text:
-              `Sent guidance notification to sub-agent ${params.agent_id}\n` +
+              `Sent guidance to sub-agent ${params.agent_id}\n` +
               `Message: ${sentText}`,
           },
         ],

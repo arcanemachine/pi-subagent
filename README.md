@@ -50,7 +50,7 @@ ln -s /path/to/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `/subagent spawn:<agent> <task>` - Spawn a new sub-agent using configured agent type
 - `/subagent fleet` - Open the interactive live sub-agent window
 - `/subagent status [id]` - View structured live status for one/all active sub-agents
-- `/subagent notify <id> <text>` - Send follow-up guidance to a running sub-agent
+- `/subagent steer <id> <text>` - Send follow-up guidance to a running sub-agent
 - `/subagent kill <id>` - Kill a specific sub-agent
 - `/subagent killall` - Kill all sub-agents
 - `/subagent show [id]` - Watch sub-agent(s) in widget (no ID = all)
@@ -60,7 +60,7 @@ ln -s /path/to/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 
 - `subagent_spawn` - Spawn a single sub-agent and return immediately (required `agent`)
 - `subagent_status` - Get structured current status (`agent_id` optional)
-- `subagent_notify` - Send follow-up guidance to a running sub-agent
+- `subagent_steer` - Send follow-up guidance to a running sub-agent
 - `subagent_kill` - Kill a specific sub-agent by ID
 - `subagent_list_types` - List configured agent types (name/model/when_to_use)
 
