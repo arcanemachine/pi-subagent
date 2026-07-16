@@ -1340,6 +1340,20 @@ function createFleetDataSource(): FleetDataSource {
               : `${id} is no longer running.`;
       return { ok: false, message };
     },
+    remove: (id) => {
+      if (!recentFleetAgents.delete(id)) {
+        return { ok: false, message: `${id} is not a finished sub-agent.` };
+      }
+      return { ok: true, message: `Removed finished sub-agent ${id}.` };
+    },
+    removeAllFinished: () => {
+      const count = recentFleetAgents.size;
+      recentFleetAgents.clear();
+      return {
+        ok: true,
+        message: `Removed ${count} finished sub-agent${count === 1 ? "" : "s"}.`,
+      };
+    },
   };
 }
 

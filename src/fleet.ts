@@ -35,10 +35,17 @@ export interface FleetAgentDetail extends FleetAgentSummary {
   timeoutAt?: number;
 }
 
+export interface FleetActionResult {
+  ok: boolean;
+  message: string;
+}
+
 export interface FleetDataSource {
   listAgents(): FleetAgentSummary[];
   getAgent(id: string): FleetAgentDetail | undefined;
-  steer(id: string, text: string): { ok: boolean; message: string };
+  steer(id: string, text: string): FleetActionResult;
+  remove(id: string): FleetActionResult;
+  removeAllFinished(): FleetActionResult;
 }
 
 function fit(text: string, width: number): string {
@@ -68,6 +75,10 @@ function isSteerable(agent: FleetAgentSummary | undefined): boolean {
   return agent?.status === "starting" || agent?.status === "running";
 }
 
+function isFinished(agent: FleetAgentSummary | undefined): boolean {
+  return Boolean(agent) && !isSteerable(agent);
+}
+
 function statusGlyph(agent: FleetAgentSummary, theme: Theme): string {
   if (agent.status === "running") return theme.fg("accent", "●");
   if (agent.status === "starting") return theme.fg("muted", "◦");
@@ -84,8 +95,12 @@ export class SubagentFleetComponent implements Component, Focusable {
   private detailAutoFollow = true;
   private detailLineCount = 0;
   private bodyHeight = 8;
-  private mode: "browse" | "steer" = "browse";
+  private mode: "browse" | "steer" | "confirm" = "browse";
   private steerTargetId: string | undefined;
+  private confirmAction:
+    | { kind: "remove-selected"; targetId: string }
+    | { kind: "remove-all" }
+    | undefined;
   private feedback = "";
   private disposed = false;
   private readonly input = new Input();
@@ -209,10 +224,64 @@ export class SubagentFleetComponent implements Component, Focusable {
     this.tui.requestRender();
   }
 
+  private beginRemoveSelected(): void {
+    const selected = this.agents[this.selected];
+    if (!isFinished(selected)) return;
+
+    this.mode = "confirm";
+    this.confirmAction = {
+      kind: "remove-selected",
+      targetId: selected!.id,
+    };
+    this.feedback = "";
+    this.tui.requestRender();
+  }
+
+  private beginRemoveAll(): void {
+    if (!this.agents.some(isFinished)) return;
+
+    this.mode = "confirm";
+    this.confirmAction = { kind: "remove-all" };
+    this.feedback = "";
+    this.tui.requestRender();
+  }
+
+  private cancelConfirmation(): void {
+    this.mode = "browse";
+    this.confirmAction = undefined;
+    this.tui.requestRender();
+  }
+
+  private confirm(): void {
+    const action = this.confirmAction;
+    if (!action) {
+      this.cancelConfirmation();
+      return;
+    }
+
+    const result =
+      action.kind === "remove-selected"
+        ? this.source.remove(action.targetId)
+        : this.source.removeAllFinished();
+    this.mode = "browse";
+    this.confirmAction = undefined;
+    this.feedback = result.message;
+    this.refresh();
+    this.tui.requestRender();
+  }
+
   handleInput(data: string): void {
     if (this.mode === "steer") {
       this.input.handleInput(data);
       this.tui.requestRender();
+      return;
+    }
+    if (this.mode === "confirm") {
+      if (matchesKey(data, "enter") || matchesKey(data, "y") || data === "Y") {
+        this.confirm();
+      } else if (matchesKey(data, "escape")) {
+        this.cancelConfirmation();
+      }
       return;
     }
 
@@ -261,8 +330,11 @@ export class SubagentFleetComponent implements Component, Focusable {
       return;
     }
     if (matchesKey(data, "r")) {
-      this.refresh();
-      this.tui.requestRender();
+      this.beginRemoveSelected();
+      return;
+    }
+    if (data === "R") {
+      this.beginRemoveAll();
     }
   }
 
@@ -431,6 +503,27 @@ export class SubagentFleetComponent implements Component, Focusable {
     return this.conversationLines(agent, width);
   }
 
+  private confirmationLines(width: number): string[] {
+    const action = this.confirmAction;
+    const message =
+      action?.kind === "remove-all"
+        ? "Remove ALL finished subagents?"
+        : "Remove the selected subagent?";
+    const innerWidth = Math.max(1, width - 2);
+    const border = (text: string) => this.theme.fg("border", text);
+    return [
+      border(`╭${"─".repeat(innerWidth)}╮`),
+      border("│") + fit(` ${message}`, innerWidth) + border("│"),
+      border("│") +
+        fit(
+          this.theme.fg("dim", " Enter/Y/y confirm · Esc cancel"),
+          innerWidth,
+        ) +
+        border("│"),
+      border(`╰${"─".repeat(innerWidth)}╯`),
+    ];
+  }
+
   render(width: number): string[] {
     if (width < 36) {
       return [
@@ -439,6 +532,12 @@ export class SubagentFleetComponent implements Component, Focusable {
           width,
         ),
       ];
+    }
+
+    if (this.mode === "confirm") {
+      return this.confirmationLines(width).map((line) =>
+        truncateToWidth(line, width, ""),
+      );
     }
 
     const innerWidth = width - 2;
@@ -516,8 +615,8 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.mode === "steer"
         ? " Enter send · Esc cancel"
         : this.feedback
-          ? ` ${this.feedback} · ↑↓ agents · s steer · Esc close`
-          : ` ↑↓/jk agent · PgUp/PgDn session · s steer · Esc close · ${position}`;
+          ? ` ${this.feedback} · ↑↓ agents · s steer · r remove · Esc close`
+          : ` ↑↓/jk agent · PgUp/PgDn session · s steer · r/R remove · Esc close · ${position}`;
     lines.push(
       border("│") + fit(this.theme.fg("dim", footer), innerWidth) + border("│"),
     );

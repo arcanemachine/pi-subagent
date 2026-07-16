@@ -296,6 +296,14 @@ test("completed fleet sessions are retained with a bounded history", () => {
   assert.equal(retained[0]?.id, "T-recent-20");
   assert.equal(retained[0]?.status, "completed");
   assert.equal(source.getAgent("T-recent-20")?.task, "test task");
+
+  assert.equal(source.remove("T-recent-20").ok, true);
+  assert.equal(source.getAgent("T-recent-20"), undefined);
+  assert.equal(
+    source.removeAllFinished().message,
+    "Removed 19 finished sub-agents.",
+  );
+  assert.equal(source.listAgents().length, 0);
 });
 
 test("child-only completion tool submits one result and requests shutdown", async () => {
@@ -435,6 +443,8 @@ test("fleet window renders bounded live details and steers the selected agent", 
       steers.push({ id, text });
       return { ok: true, message: `Guidance sent to ${id}.` };
     },
+    remove: (id) => ({ ok: true, message: `Removed ${id}.` }),
+    removeAllFinished: () => ({ ok: true, message: "Removed all." }),
   };
   let closed = false;
   let renderRequests = 0;
@@ -495,6 +505,109 @@ test("fleet window renders bounded live details and steers the selected agent", 
     assert.ok(component.render(90).length <= 9);
     component.handleInput("\x1b");
     assert.equal(closed, true);
+  } finally {
+    component.dispose();
+  }
+});
+
+test("fleet window confirms removal of selected and all finished sessions", () => {
+  const now = Date.now();
+  const agents: FleetAgentDetail[] = [
+    {
+      id: "finished-one",
+      status: "completed",
+      taskTitle: "first finished task",
+      task: "First finished task",
+      startTime: now - 4000,
+      endTime: now - 3000,
+      activity: [],
+      currentResponsePreview: "",
+    },
+    {
+      id: "finished-two",
+      status: "error",
+      taskTitle: "second finished task",
+      task: "Second finished task",
+      startTime: now - 3000,
+      endTime: now - 2000,
+      activity: [],
+      currentResponsePreview: "",
+    },
+    {
+      id: "running-one",
+      status: "running",
+      taskTitle: "running task",
+      task: "Running task",
+      startTime: now - 1000,
+      activity: [],
+      currentResponsePreview: "",
+    },
+  ];
+  const source: FleetDataSource = {
+    listAgents: () =>
+      agents.map(
+        ({ task, activity, currentResponsePreview, ...agent }) => agent,
+      ),
+    getAgent: (id) => agents.find((agent) => agent.id === id),
+    steer: () => ({ ok: true, message: "Guidance sent." }),
+    remove: (id) => {
+      const index = agents.findIndex((agent) => agent.id === id);
+      if (index < 0) return { ok: false, message: "Not found." };
+      agents.splice(index, 1);
+      return { ok: true, message: `Removed finished sub-agent ${id}.` };
+    },
+    removeAllFinished: () => {
+      const retained = agents.filter(
+        (agent) => agent.status === "starting" || agent.status === "running",
+      );
+      const count = agents.length - retained.length;
+      agents.splice(0, agents.length, ...retained);
+      return {
+        ok: true,
+        message: `Removed ${count} finished sub-agents.`,
+      };
+    },
+  };
+  const component = new SubagentFleetComponent(
+    { terminal: { rows: 24, columns: 90 }, requestRender() {} } as never,
+    {
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as never,
+    source,
+    () => {},
+    60_000,
+  );
+
+  try {
+    component.handleInput("r");
+    assert.ok(
+      component
+        .render(90)
+        .some((line) => line.includes("Remove the selected subagent?")),
+    );
+    component.handleInput("\x1b");
+    assert.equal(agents.length, 3);
+
+    component.handleInput("r");
+    component.handleInput("\r");
+    assert.deepEqual(
+      agents.map((agent) => agent.id),
+      ["finished-two", "running-one"],
+    );
+
+    component.handleInput("R");
+    assert.ok(
+      component
+        .render(90)
+        .some((line) => line.includes("Remove ALL finished subagents?")),
+    );
+    component.handleInput("Y");
+    assert.deepEqual(
+      agents.map((agent) => agent.id),
+      ["running-one"],
+    );
   } finally {
     component.dispose();
   }
