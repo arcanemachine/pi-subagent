@@ -46,6 +46,7 @@ ln -s /path/to/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 
 ### Commands
 
+- `/subagent` - Open the interactive live sub-agent window
 - `/subagent spawn:<agent> <task>` - Spawn a new sub-agent using configured agent type
 - `/subagent fleet` - Open the interactive live sub-agent window
 - `/subagent steer <id|all> <text>` - Send follow-up guidance to one or every running sub-agent

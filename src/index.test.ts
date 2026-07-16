@@ -365,6 +365,16 @@ test("registers the supported command surface and steers all agents", async () =
     ),
   );
 
+  const plainCommandNotifications: string[] = [];
+  await subagentCommand.command.handler("", {
+    cwd: process.cwd(),
+    hasUI: false,
+    ui: {
+      notify: (message: string) => plainCommandNotifications.push(message),
+    },
+  });
+  assert.deepEqual(plainCommandNotifications, []);
+
   const agent = __test.addMockAgent("T-steer");
   const steerTool = tools.find((tool) => tool.name === "subagent_steer");
   const result = await steerTool.execute(

@@ -1485,15 +1485,7 @@ export default function (pi: ExtensionAPI) {
     },
     handler: async (args: string, ctx) => {
       refreshConfiguredAgents(ctx.cwd);
-      const trimmedArgs = args.trim();
-      if (!trimmedArgs) {
-        ctx.ui.notify(
-          "Usage: /subagent spawn:<agent>|fleet|steer|kill|killall",
-          "error",
-        );
-        return;
-      }
-
+      const trimmedArgs = args.trim() || "fleet";
       const [subcommand, ...rest] = trimmedArgs.split(/\s+/);
       const subArgs = rest.join(" ");
 
