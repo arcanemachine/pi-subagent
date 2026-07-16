@@ -730,6 +730,7 @@ test("fleet action rows wrap and include same-color spacing", () => {
     currentResponsePreview: "",
   };
   const toolBackgrounds: string[] = [];
+  const userBackgrounds: string[] = [];
   const component = new SubagentFleetComponent(
     { terminal: { rows: 40, columns: 90 }, requestRender() {} } as never,
     {
@@ -738,6 +739,10 @@ test("fleet action rows wrap and include same-color spacing", () => {
         if (color === "toolSuccessBg") {
           toolBackgrounds.push(text);
           return `\x1b[44m${text}\x1b[0m`;
+        }
+        if (color === "userMessageBg") {
+          userBackgrounds.push(text);
+          return `\x1b[100m${text}\x1b[0m`;
         }
         return text;
       },
@@ -789,6 +794,15 @@ test("fleet action rows wrap and include same-color spacing", () => {
     assert.ok(hasBlankDetailRow(toolEndRow, firstResponseRow));
     assert.ok(hasBlankDetailRow(firstResponseRow, secondResponseRow));
     assert.ok(hasBlankDetailRow(secondResponseRow, thirdResponseRow));
+    assert.ok(userBackgrounds.length >= 3);
+    assert.equal(userBackgrounds[0]?.trim(), "");
+    assert.equal(userBackgrounds[userBackgrounds.length - 1]?.trim(), "");
+    assert.ok(
+      userBackgrounds.every(
+        (line) => visibleWidth(line) === visibleWidth(userBackgrounds[0] ?? ""),
+      ),
+      "every message line should fill the same background width",
+    );
     assert.ok(
       toolBackgrounds.length >= 4,
       "tool row should span multiple lines",

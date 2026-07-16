@@ -416,12 +416,16 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   private userMessageLines(text: string, width: number): string[] {
-    return this.wrapLines(text, Math.max(1, width - 2)).map((line) =>
-      this.theme.bg(
-        "userMessageBg",
-        this.theme.fg("userMessageText", fit(` ${line}`, width)),
-      ),
+    const topBlank = this.theme.bg("userMessageBg", fit("", width));
+    const contentLines = this.wrapLines(text, Math.max(1, width - 2)).map(
+      (line) =>
+        this.theme.bg(
+          "userMessageBg",
+          this.theme.fg("userMessageText", fit(` ${line}`, width)),
+        ),
     );
+    const bottomBlank = this.theme.bg("userMessageBg", fit("", width));
+    return [topBlank, ...contentLines, bottomBlank];
   }
 
   private toolActivityLines(
