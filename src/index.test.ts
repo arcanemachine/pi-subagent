@@ -722,8 +722,8 @@ test("fleet action rows wrap and include same-color spacing", () => {
     task: "Render the action",
     startTime: Date.now() - 1000,
     activity: [
-      "💬 First response",
       action,
+      "💬 First response",
       "↻ Second response",
       "💬 Third response",
     ],
@@ -735,7 +735,10 @@ test("fleet action rows wrap and include same-color spacing", () => {
     {
       fg: (_color: string, text: string) => text,
       bg: (color: string, text: string) => {
-        if (color === "toolSuccessBg") toolBackgrounds.push(text);
+        if (color === "toolSuccessBg") {
+          toolBackgrounds.push(text);
+          return `\x1b[44m${text}\x1b[0m`;
+        }
         return text;
       },
       bold: (text: string) => text,
@@ -760,14 +763,17 @@ test("fleet action rows wrap and include same-color spacing", () => {
       rendered.includes("tail-marker"),
       "tool text must wrap, not truncate",
     );
-    const firstResponseRow = renderedLines.findIndex((line) =>
-      line.includes("First response"),
+    const taskRow = renderedLines.findIndex((line) =>
+      line.includes("Render the action"),
     );
     const toolStartRow = renderedLines.findIndex((line) =>
       line.includes("search_web"),
     );
     const toolEndRow = renderedLines.findIndex((line) =>
       line.includes("tail-marker"),
+    );
+    const firstResponseRow = renderedLines.findIndex((line) =>
+      line.includes("First response"),
     );
     const secondResponseRow = renderedLines.findIndex((line) =>
       line.includes("Retry: Second response"),
@@ -779,8 +785,9 @@ test("fleet action rows wrap and include same-color spacing", () => {
       renderedLines
         .slice(start + 1, end)
         .some((line) => line.split("│")[2]?.trim() === "");
-    assert.ok(hasBlankDetailRow(firstResponseRow, toolStartRow));
-    assert.ok(hasBlankDetailRow(toolEndRow, secondResponseRow));
+    assert.ok(hasBlankDetailRow(taskRow, toolStartRow));
+    assert.ok(hasBlankDetailRow(toolEndRow, firstResponseRow));
+    assert.ok(hasBlankDetailRow(firstResponseRow, secondResponseRow));
     assert.ok(hasBlankDetailRow(secondResponseRow, thirdResponseRow));
     assert.ok(
       toolBackgrounds.length >= 4,

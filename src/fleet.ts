@@ -463,16 +463,8 @@ export class SubagentFleetComponent implements Component, Focusable {
       ...this.userMessageLines(agent.task, width),
     );
 
-    let previousBlockHasTrailingBlank = false;
-    const appendActivityBlock = (
-      block: string[],
-      options: { leadingBlank?: boolean; trailingBlank?: boolean } = {},
-    ) => {
-      if (!previousBlockHasTrailingBlank && !options.leadingBlank) {
-        lines.push("");
-      }
-      lines.push(...block);
-      previousBlockHasTrailingBlank = options.trailingBlank ?? false;
+    const appendActivityBlock = (block: string[]) => {
+      lines.push("", ...block);
     };
 
     let lastToolIndex = -1;
@@ -509,7 +501,6 @@ export class SubagentFleetComponent implements Component, Focusable {
             width,
             index === lastToolIndex && Boolean(agent.currentTool),
           ),
-          { leadingBlank: true, trailingBlank: true },
         );
         continue;
       }
