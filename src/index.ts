@@ -1543,9 +1543,9 @@ export default function (pi: ExtensionAPI) {
           pi.sendMessage({
             customType: "subagent-spawned",
             content:
-              `🚀 Spawned sub-agent **${agent.id}**\n` +
-              `Task: ${agent.task}\n` +
+              `🚀 Spawned sub-agent ${agent.id}\n\n` +
               `Agent type: ${agent.agentType || "(unknown)"}\n` +
+              `Task: ${agent.task}\n` +
               `Model: ${agent.model || "(unknown)"}\n` +
               `Timeout: ${agent.timeoutSeconds ? `${agent.timeoutSeconds}s` : "(none)"}`,
             display: true,
