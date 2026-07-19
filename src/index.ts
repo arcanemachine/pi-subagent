@@ -100,6 +100,9 @@ type PiSubagentSettings = {
 };
 
 const STALE_RUNNING_MS = 60_000;
+const EXTRA_SUBAGENT_INSTRUCTIONS =
+  "Ensure that your work stays scoped to the assigned task.";
+
 const SUBAGENT_COMPLETION_INSTRUCTIONS = `Do the requested task only; do not expand scope. If the task is too large, complete the highest-value slice and clearly state what remains.
 
 When finished or blocked, call the \`subagent_complete\` tool with the complete deliverable for the parent in its \`result\` field. A successful call should be your final action. If the tool returns an error, correct the result and call it again. The result may use normal Markdown and should include evidence, changed files, commands, or open questions only when relevant. Do not include planning or process narration.
@@ -309,7 +312,7 @@ function formatSubagentPrompt(task: string, extraContext?: string): string {
     ? task
     : `Additional context:\n${extraContext.trim()}\n\nTask:\n${task}`;
 
-  return `${taskWithContext}\n\n${SUBAGENT_COMPLETION_INSTRUCTIONS}`;
+  return `${EXTRA_SUBAGENT_INSTRUCTIONS}\n\n${taskWithContext}\n\n${SUBAGENT_COMPLETION_INSTRUCTIONS}`;
 }
 
 function isAgentFinished(agent: SubAgent): boolean {
