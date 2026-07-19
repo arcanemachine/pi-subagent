@@ -32,6 +32,7 @@ export interface FleetAgentDetail extends FleetAgentSummary {
   task: string;
   activity: readonly string[];
   currentResponsePreview: string;
+  completionResult?: string;
   timeoutSeconds?: number;
   timeoutAt?: number;
 }
@@ -533,7 +534,19 @@ export class SubagentFleetComponent implements Component, Focusable {
         this.theme.fg("accent", " ▍"),
       ]);
     }
-    if (agent.activity.length === 0 && !preview) {
+
+    const completionResult = agent.completionResult?.trim();
+    if (completionResult) {
+      appendActivityBlock([
+        this.theme.fg("success", this.theme.bold(" Final result")),
+        ...this.wrapLines(
+          this.theme.fg("text", completionResult),
+          Math.max(1, width - 2),
+        ).map((line) => ` ${line}`),
+      ]);
+    }
+
+    if (agent.activity.length === 0 && !preview && !completionResult) {
       appendActivityBlock([this.theme.fg("dim", " Waiting for a response…")]);
     }
     return lines;

@@ -1213,6 +1213,7 @@ function toFleetAgentDetail(agent: SubAgent): FleetAgentDetail {
     task: agent.task,
     activity: agent.activity,
     currentResponsePreview: agent.currentResponsePreview,
+    completionResult: agent.completionResult,
     timeoutSeconds: agent.timeoutSeconds,
     timeoutAt: agent.timeoutAt,
   };

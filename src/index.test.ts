@@ -542,6 +542,7 @@ test("fleet window renders bounded live details and steers the selected agent", 
       endTime: now - 1000,
       activity: ["🔧 read({path: src/index.ts})"],
       currentResponsePreview: "Reviewing the current implementation",
+      completionResult: "The implementation review is complete.",
     },
     {
       id: "agent-two",
@@ -559,7 +560,13 @@ test("fleet window renders bounded live details and steers the selected agent", 
   const source: FleetDataSource = {
     listAgents: () =>
       agents.map(
-        ({ activity, currentResponsePreview, task, ...agent }) => agent,
+        ({
+          activity,
+          currentResponsePreview,
+          completionResult,
+          task,
+          ...agent
+        }) => agent,
       ),
     getAgent: (id) => agents.find((agent) => agent.id === id),
     steer: (id, text) => {
@@ -599,6 +606,12 @@ test("fleet window renders bounded live details and steers the selected agent", 
       lines.some((line) => line.includes("Research the implementation")),
     );
     assert.ok(lines.some((line) => line.includes("Reviewing the current")));
+    assert.ok(lines.some((line) => line.includes("Final result")));
+    assert.ok(
+      lines.some((line) =>
+        line.includes("The implementation review is complete."),
+      ),
+    );
     assert.ok(lines.every((line) => !line.includes("(done)")));
     assert.ok(lines.every((line) => visibleWidth(line) <= 90));
 
