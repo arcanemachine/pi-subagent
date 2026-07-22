@@ -3,7 +3,11 @@ import type {
   ExtensionContext,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import { getAgentDir, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import {
+  calculateContextTokens,
+  getAgentDir,
+  getMarkdownTheme,
+} from "@earendil-works/pi-coding-agent";
 import { Box, Markdown, type Component, Text } from "@earendil-works/pi-tui";
 import { spawn, ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -47,6 +51,12 @@ interface SubAgent {
   lastAction?: string;
   progressPercent?: number;
   progressBuffer?: string;
+  /** Resolved child model context window, captured from a `get_state` RPC reply. */
+  contextWindow?: number;
+  /** Estimated context tokens from the latest assistant `usage`, for `28.8%/250k`-style display. */
+  contextTokens?: number;
+  /** Outgoing `get_state` request id awaiting a correlated reply. */
+  pendingGetStateId?: string;
   lastActivity: number;
   receivedEvent: boolean;
   timeoutSeconds?: number;
@@ -313,6 +323,28 @@ function formatSubagentPrompt(task: string, extraContext?: string): string {
     : `Additional context:\n${extraContext.trim()}\n\nTask:\n${task}`;
 
   return `${EXTRA_SUBAGENT_INSTRUCTIONS}\n\n${taskWithContext}\n\n${SUBAGENT_COMPLETION_INSTRUCTIONS}`;
+}
+
+/** Format token counts like Pi's status bar (e.g. `250k`, `1.5M`). */
+function formatTokens(count: number): string {
+  if (count < 1000) return String(count);
+  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+  if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  return `${Math.round(count / 1_000_000)}M`;
+}
+
+/** Format context usage like Pi's status bar (e.g. `28.8%/250k`, `?/250k`), or "" when the window is unknown. */
+function formatContextUsage(agent: {
+  contextWindow?: number;
+  contextTokens?: number;
+}): string {
+  const window = agent.contextWindow;
+  if (!window) return "";
+  const tokens = agent.contextTokens;
+  if (tokens == null) return `?/${formatTokens(window)}`;
+  const percent = (tokens / window) * 100;
+  return `${percent.toFixed(1)}%/${formatTokens(window)}`;
 }
 
 function isAgentFinished(agent: SubAgent): boolean {
@@ -722,7 +754,28 @@ function handleSubAgentEvent(
         ? event.message.errorMessage.trim()
         : undefined;
     if (text) recordActivity(agent, `💬 ${text}`);
+    const usage = (event.message as { usage?: unknown }).usage;
+    if (usage && typeof usage === "object") {
+      const tokens = calculateContextTokens(usage as never);
+      if (tokens > 0) agent.contextTokens = tokens;
+    }
     agent.currentResponsePreview = "";
+    return;
+  }
+
+  if (
+    event.type === "response" &&
+    event.command === "get_state" &&
+    event.id === agent.pendingGetStateId
+  ) {
+    agent.pendingGetStateId = undefined;
+    if (event.success !== false) {
+      const model = (event as { data?: { model?: { contextWindow?: number } } })
+        .data?.model;
+      if (model && typeof model.contextWindow === "number") {
+        agent.contextWindow = model.contextWindow;
+      }
+    }
     return;
   }
 
@@ -930,6 +983,14 @@ function spawnSubAgent(
   });
   proc.stdin?.write(prompt + "\n");
 
+  // Ask the child for its resolved model so the context window is known for
+  // `28.8%/250k`-style usage display. Context tokens arrive per assistant reply.
+  const getStateId = `subagent-ctx-${id}`;
+  agent.pendingGetStateId = getStateId;
+  proc.stdin?.write(
+    JSON.stringify({ id: getStateId, type: "get_state" }) + "\n",
+  );
+
   activeAgents.set(id, agent);
   scheduleSubAgentTimeout(agent, timeoutSecondsOverride);
 
@@ -1017,6 +1078,9 @@ function buildAgentStatusSnapshot(agent: SubAgent) {
     timeoutSeconds: agent.timeoutSeconds,
     timeoutAt: agent.timeoutAt,
     timeoutNotified: agent.timeoutNotified,
+    contextWindow: agent.contextWindow,
+    contextTokens: agent.contextTokens,
+    contextUsage: formatContextUsage(agent),
   };
 }
 
@@ -1032,6 +1096,9 @@ function buildCompactAgentStatusSnapshot(agent: SubAgent) {
     blockedReason: snapshot.blockedReason,
     lastMeaningfulEvent: snapshot.lastMeaningfulEvent,
     etaConfidence: snapshot.etaConfidence,
+    contextWindow: snapshot.contextWindow,
+    contextTokens: snapshot.contextTokens,
+    contextUsage: snapshot.contextUsage,
   };
 }
 
@@ -1204,6 +1271,8 @@ function toFleetAgentSummary(agent: SubAgent): FleetAgentSummary {
     currentTool: agent.currentTool,
     lastAction: agent.lastAction,
     progressPercent: agent.progressPercent,
+    contextWindow: agent.contextWindow,
+    contextTokens: agent.contextTokens,
   };
 }
 
@@ -2131,6 +2200,8 @@ export const __test = {
   recordActivity,
   interruptSubAgentForReload,
   terminateSubAgentWithoutNotification,
+  formatTokens,
+  formatContextUsage,
 
   setDefaultTimeoutSeconds(seconds: number | undefined) {
     defaultTimeoutSeconds = seconds;

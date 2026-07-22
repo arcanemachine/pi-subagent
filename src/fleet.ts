@@ -26,6 +26,8 @@ export interface FleetAgentSummary {
   currentTool?: string;
   lastAction?: string;
   progressPercent?: number;
+  contextWindow?: number;
+  contextTokens?: number;
 }
 
 export interface FleetAgentDetail extends FleetAgentSummary {
@@ -73,6 +75,28 @@ function formatDuration(agent: FleetAgentSummary): string {
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${seconds % 60}s`;
+}
+
+/** Format token counts like Pi's status bar (e.g. `250k`, `1.5M`). */
+function formatTokens(count: number): string {
+  if (count < 1000) return String(count);
+  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+  if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  return `${Math.round(count / 1_000_000)}M`;
+}
+
+/** Format context usage like Pi's status bar (`28.8%/250k`, `?/250k`), or "" when the window is unknown. */
+function formatContextUsage(agent: {
+  contextWindow?: number;
+  contextTokens?: number;
+}): string {
+  const window = agent.contextWindow;
+  if (!window) return "";
+  const tokens = agent.contextTokens;
+  if (tokens == null) return `?/${formatTokens(window)}`;
+  const percent = (tokens / window) * 100;
+  return `${percent.toFixed(1)}%/${formatTokens(window)}`;
 }
 
 function isSteerable(agent: FleetAgentSummary | undefined): boolean {
@@ -397,8 +421,10 @@ export class SubagentFleetComponent implements Component, Focusable {
         const marker =
           index === this.selected ? this.theme.fg("accent", "›") : " ";
         const name = agent.agentType ?? "agent";
-        const state =
-          agent.status === "error"
+        const context = formatContextUsage(agent);
+        const state = context
+          ? context
+          : agent.status === "error"
             ? "(error)"
             : agent.status === "interrupted"
               ? "(stopped)"
@@ -458,7 +484,8 @@ export class SubagentFleetComponent implements Component, Focusable {
   private conversationLines(agent: FleetAgentDetail, width: number): string[] {
     const lines: string[] = [];
     const identity = `${agent.agentType ?? "agent"} · ${agent.model ?? "model unknown"}`;
-    const state = `${statusGlyph(agent, this.theme)} ${agent.status} · ${formatDuration(agent)}`;
+    const context = formatContextUsage(agent);
+    const state = `${statusGlyph(agent, this.theme)} ${agent.status} · ${formatDuration(agent)}${context ? ` · ${context}` : ""}`;
     lines.push(
       rightAligned(
         this.theme.fg("muted", ` ${identity}`),

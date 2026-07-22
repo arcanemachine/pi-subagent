@@ -173,6 +173,62 @@ test("truncated responses preserve partial text and fail", () => {
   assert.ok(sent[0]?.content.includes("partial answer"));
 });
 
+test("get_state response captures the child context window", () => {
+  __test.resetState();
+  const agent = __test.addMockAgent("T-ctx", {
+    pendingGetStateId: "subagent-ctx-T-ctx",
+  });
+
+  __test.handleSubAgentEvent(agent, {
+    type: "response",
+    id: "subagent-ctx-T-ctx",
+    command: "get_state",
+    success: true,
+    data: { model: { id: "sonnet", contextWindow: 200000 } },
+  });
+
+  assert.equal(agent.contextWindow, 200000);
+  assert.equal(agent.pendingGetStateId, undefined);
+  assert.equal(agent.activity.length, 0, "internal get_state is not recorded");
+});
+
+test("assistant usage updates context tokens", () => {
+  __test.resetState();
+  const agent = __test.addMockAgent("T-usage", { contextWindow: 200000 });
+
+  __test.handleSubAgentEvent(agent, {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "working" }],
+      stopReason: "stop",
+      usage: {
+        input: 50000,
+        output: 1200,
+        cacheRead: 100000,
+        cacheWrite: 0,
+        totalTokens: 151200,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    },
+  });
+
+  assert.equal(agent.contextTokens, 151200);
+});
+
+test("formatContextUsage mirrors the Pi status bar style", () => {
+  assert.equal(
+    __test.formatContextUsage({ contextWindow: 250000, contextTokens: 72000 }),
+    "28.8%/250k",
+  );
+  assert.equal(
+    __test.formatContextUsage({ contextWindow: 200000, contextTokens: 151200 }),
+    "75.6%/200k",
+  );
+  assert.equal(__test.formatContextUsage({ contextWindow: 200000 }), "?/200k");
+  assert.equal(__test.formatContextUsage({ contextTokens: 1000 }), "");
+});
+
 test("process failures do not suggest changing task scope", () => {
   __test.resetState();
   const sent = captureCompletions();
@@ -646,6 +702,80 @@ test("fleet window renders bounded live details and steers the selected agent", 
     assert.ok(component.render(90).length <= 9);
     component.handleInput("\x1b");
     assert.equal(closed, true);
+  } finally {
+    component.dispose();
+  }
+});
+
+test("fleet window shows context usage in the roster and detail header", () => {
+  const now = Date.now();
+  const agents: FleetAgentDetail[] = [
+    {
+      id: "ctx-one",
+      agentType: "researcher",
+      model: "provider/researcher",
+      status: "running",
+      taskTitle: "running task",
+      task: "Running task",
+      startTime: now - 1000,
+      activity: [],
+      currentResponsePreview: "",
+      contextWindow: 250000,
+      contextTokens: 72000,
+    },
+    {
+      id: "ctx-pending",
+      agentType: "worker",
+      model: "provider/worker",
+      status: "starting",
+      taskTitle: "just spawned",
+      task: "Just spawned",
+      startTime: now,
+      activity: [],
+      currentResponsePreview: "",
+      contextWindow: 200000,
+    },
+  ];
+  const source: FleetDataSource = {
+    listAgents: () =>
+      agents.map(
+        ({ task, activity, currentResponsePreview, ...agent }) => agent,
+      ),
+    getAgent: (id) => agents.find((agent) => agent.id === id),
+    steer: () => ({ ok: true, message: "Guidance sent." }),
+    remove: () => ({ ok: true, message: "Removed." }),
+    removeAllFinished: () => ({ ok: true, message: "Removed all." }),
+    stop: () => ({ ok: true, message: "Stopped." }),
+    stopAllRunning: () => ({ ok: true, message: "Stopped all." }),
+  };
+  const component = new SubagentFleetComponent(
+    { terminal: { rows: 24, columns: 90 }, requestRender() {} } as never,
+    {
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as never,
+    source,
+    () => {},
+    60_000,
+  );
+
+  try {
+    const lines = component.render(90);
+    assert.ok(
+      lines.some((line) => line.includes("28.8%/250k")),
+      "roster shows the running agent context usage",
+    );
+    assert.ok(
+      lines.some((line) => line.includes("?/200k")),
+      "roster shows the pending agent window before first response",
+    );
+    // The selected agent (ctx-one) detail header appends context usage.
+    assert.ok(
+      lines.some((line) => line.includes("running · 1s · 28.8%/250k")),
+      "detail header shows context usage alongside status and duration",
+    );
+    assert.ok(lines.every((line) => visibleWidth(line) <= 90));
   } finally {
     component.dispose();
   }

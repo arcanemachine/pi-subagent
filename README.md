@@ -129,6 +129,8 @@ Press `x` to stop the selected running sub-agent or `X` to stop all running sub-
 
 The window refreshes automatically and reads from bounded activity buffers. Finished sessions remain individually selectable and use status icons; only the 20 most recent finished sessions are retained, without keeping their child processes alive.
 
+Each sub-agent also reports context-window usage in the Pi status-bar style (e.g. `28.8%/250k`, or `?/250k` until the first reply). The fleet roster shows it on the right of each row, and the detail header shows it alongside status and duration. The context window is captured from each child's resolved model, and the used tokens update from every assistant reply's `usage`. The `subagent_status` tool exposes the same values as `contextWindow`, `contextTokens`, and a preformatted `contextUsage` string.
+
 ## Development
 
 For local development and verification:
