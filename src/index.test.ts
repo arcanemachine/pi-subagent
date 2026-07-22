@@ -173,28 +173,9 @@ test("truncated responses preserve partial text and fail", () => {
   assert.ok(sent[0]?.content.includes("partial answer"));
 });
 
-test("get_state response captures the child context window", () => {
-  __test.resetState();
-  const agent = __test.addMockAgent("T-ctx", {
-    pendingGetStateId: "subagent-ctx-T-ctx",
-  });
-
-  __test.handleSubAgentEvent(agent, {
-    type: "response",
-    id: "subagent-ctx-T-ctx",
-    command: "get_state",
-    success: true,
-    data: { model: { id: "sonnet", contextWindow: 200000 } },
-  });
-
-  assert.equal(agent.contextWindow, 200000);
-  assert.equal(agent.pendingGetStateId, undefined);
-  assert.equal(agent.activity.length, 0, "internal get_state is not recorded");
-});
-
 test("assistant usage updates context tokens", () => {
   __test.resetState();
-  const agent = __test.addMockAgent("T-usage", { contextWindow: 200000 });
+  const agent = __test.addMockAgent("T-usage");
 
   __test.handleSubAgentEvent(agent, {
     type: "message_end",
@@ -216,17 +197,13 @@ test("assistant usage updates context tokens", () => {
   assert.equal(agent.contextTokens, 151200);
 });
 
-test("formatContextUsage mirrors the Pi status bar style", () => {
-  assert.equal(
-    __test.formatContextUsage({ contextWindow: 250000, contextTokens: 72000 }),
-    "28.8%/250k",
-  );
-  assert.equal(
-    __test.formatContextUsage({ contextWindow: 200000, contextTokens: 151200 }),
-    "75.6%/200k",
-  );
-  assert.equal(__test.formatContextUsage({ contextWindow: 200000 }), "?/200k");
-  assert.equal(__test.formatContextUsage({ contextTokens: 1000 }), "");
+test("formatContextTokens formats zero-padded millions", () => {
+  assert.equal(__test.formatContextTokens(72000), "0.072Mt");
+  assert.equal(__test.formatContextTokens(151200), "0.151Mt");
+  assert.equal(__test.formatContextTokens(1000), "0.001Mt");
+  assert.equal(__test.formatContextTokens(1_500_000), "1.500Mt");
+  assert.equal(__test.formatContextTokens(undefined), undefined);
+  assert.equal(__test.formatContextTokens(0), undefined);
 });
 
 test("process failures do not suggest changing task scope", () => {
@@ -707,7 +684,7 @@ test("fleet window renders bounded live details and steers the selected agent", 
   }
 });
 
-test("fleet window shows context usage in the roster and detail header", () => {
+test("fleet window shows timer and token count in roster and detail header", () => {
   const now = Date.now();
   const agents: FleetAgentDetail[] = [
     {
@@ -717,23 +694,22 @@ test("fleet window shows context usage in the roster and detail header", () => {
       status: "running",
       taskTitle: "running task",
       task: "Running task",
-      startTime: now - 1000,
+      startTime: now - 90_000,
       activity: [],
       currentResponsePreview: "",
-      contextWindow: 250000,
       contextTokens: 72000,
     },
     {
-      id: "ctx-pending",
+      id: "ctx-two",
       agentType: "worker",
       model: "provider/worker",
-      status: "starting",
-      taskTitle: "just spawned",
-      task: "Just spawned",
-      startTime: now,
+      status: "running",
+      taskTitle: "second task",
+      task: "Second task",
+      startTime: now - 45_000,
       activity: [],
       currentResponsePreview: "",
-      contextWindow: 200000,
+      contextTokens: 151200,
     },
   ];
   const source: FleetDataSource = {
@@ -762,18 +738,19 @@ test("fleet window shows context usage in the roster and detail header", () => {
 
   try {
     const lines = component.render(90);
+    // Each roster row is `duration·tokens` (timer restored, no percentage).
     assert.ok(
-      lines.some((line) => line.includes("28.8%/250k")),
-      "roster shows the running agent context usage",
+      lines.some((line) => line.includes("01m30s·0.072Mt")),
+      "roster shows duration plus token count for ctx-one",
     );
     assert.ok(
-      lines.some((line) => line.includes("?/200k")),
-      "roster shows the pending agent window before first response",
+      lines.some((line) => line.includes("45s·0.151Mt")),
+      "roster shows duration plus token count for ctx-two",
     );
-    // The selected agent (ctx-one) detail header appends context usage.
+    // The selected agent (ctx-one) detail header appends the token count.
     assert.ok(
-      lines.some((line) => line.includes("running · 1s · 28.8%/250k")),
-      "detail header shows context usage alongside status and duration",
+      lines.some((line) => line.includes("running · 01m30s · 0.072Mt")),
+      "detail header shows status, timer, and token count",
     );
     assert.ok(lines.every((line) => visibleWidth(line) <= 90));
   } finally {

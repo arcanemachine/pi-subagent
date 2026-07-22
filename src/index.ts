@@ -51,12 +51,8 @@ interface SubAgent {
   lastAction?: string;
   progressPercent?: number;
   progressBuffer?: string;
-  /** Resolved child model context window, captured from a `get_state` RPC reply. */
-  contextWindow?: number;
-  /** Estimated context tokens from the latest assistant `usage`, for `28.8%/250k`-style display. */
+  /** Total context tokens from the latest assistant `usage`, for monitoring sub-agent token use. */
   contextTokens?: number;
-  /** Outgoing `get_state` request id awaiting a correlated reply. */
-  pendingGetStateId?: string;
   lastActivity: number;
   receivedEvent: boolean;
   timeoutSeconds?: number;
@@ -325,26 +321,11 @@ function formatSubagentPrompt(task: string, extraContext?: string): string {
   return `${EXTRA_SUBAGENT_INSTRUCTIONS}\n\n${taskWithContext}\n\n${SUBAGENT_COMPLETION_INSTRUCTIONS}`;
 }
 
-/** Format token counts like Pi's status bar (e.g. `250k`, `1.5M`). */
-function formatTokens(count: number): string {
-  if (count < 1000) return String(count);
-  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
-  if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  return `${Math.round(count / 1_000_000)}M`;
-}
-
-/** Format context usage like Pi's status bar (e.g. `28.8%/250k`, `?/250k`), or "" when the window is unknown. */
-function formatContextUsage(agent: {
-  contextWindow?: number;
-  contextTokens?: number;
-}): string {
-  const window = agent.contextWindow;
-  if (!window) return "";
-  const tokens = agent.contextTokens;
-  if (tokens == null) return `?/${formatTokens(window)}`;
-  const percent = (tokens / window) * 100;
-  return `${percent.toFixed(1)}%/${formatTokens(window)}`;
+/** Format context tokens as zero-padded millions (e.g. `0.072Mt`), or undefined when none reported yet. */
+function formatContextTokens(tokens: number | undefined): string | undefined {
+  if (tokens == null || !Number.isFinite(tokens) || tokens <= 0)
+    return undefined;
+  return `${(tokens / 1_000_000).toFixed(3)}Mt`;
 }
 
 function isAgentFinished(agent: SubAgent): boolean {
@@ -763,22 +744,6 @@ function handleSubAgentEvent(
     return;
   }
 
-  if (
-    event.type === "response" &&
-    event.command === "get_state" &&
-    event.id === agent.pendingGetStateId
-  ) {
-    agent.pendingGetStateId = undefined;
-    if (event.success !== false) {
-      const model = (event as { data?: { model?: { contextWindow?: number } } })
-        .data?.model;
-      if (model && typeof model.contextWindow === "number") {
-        agent.contextWindow = model.contextWindow;
-      }
-    }
-    return;
-  }
-
   if (event.type === "tool_execution_start") {
     const toolName =
       typeof event.toolName === "string" ? event.toolName : "unknown";
@@ -983,14 +948,6 @@ function spawnSubAgent(
   });
   proc.stdin?.write(prompt + "\n");
 
-  // Ask the child for its resolved model so the context window is known for
-  // `28.8%/250k`-style usage display. Context tokens arrive per assistant reply.
-  const getStateId = `subagent-ctx-${id}`;
-  agent.pendingGetStateId = getStateId;
-  proc.stdin?.write(
-    JSON.stringify({ id: getStateId, type: "get_state" }) + "\n",
-  );
-
   activeAgents.set(id, agent);
   scheduleSubAgentTimeout(agent, timeoutSecondsOverride);
 
@@ -1078,9 +1035,8 @@ function buildAgentStatusSnapshot(agent: SubAgent) {
     timeoutSeconds: agent.timeoutSeconds,
     timeoutAt: agent.timeoutAt,
     timeoutNotified: agent.timeoutNotified,
-    contextWindow: agent.contextWindow,
     contextTokens: agent.contextTokens,
-    contextUsage: formatContextUsage(agent),
+    contextTokensDisplay: formatContextTokens(agent.contextTokens),
   };
 }
 
@@ -1096,9 +1052,8 @@ function buildCompactAgentStatusSnapshot(agent: SubAgent) {
     blockedReason: snapshot.blockedReason,
     lastMeaningfulEvent: snapshot.lastMeaningfulEvent,
     etaConfidence: snapshot.etaConfidence,
-    contextWindow: snapshot.contextWindow,
     contextTokens: snapshot.contextTokens,
-    contextUsage: snapshot.contextUsage,
+    contextTokensDisplay: snapshot.contextTokensDisplay,
   };
 }
 
@@ -1271,7 +1226,6 @@ function toFleetAgentSummary(agent: SubAgent): FleetAgentSummary {
     currentTool: agent.currentTool,
     lastAction: agent.lastAction,
     progressPercent: agent.progressPercent,
-    contextWindow: agent.contextWindow,
     contextTokens: agent.contextTokens,
   };
 }
@@ -2200,8 +2154,7 @@ export const __test = {
   recordActivity,
   interruptSubAgentForReload,
   terminateSubAgentWithoutNotification,
-  formatTokens,
-  formatContextUsage,
+  formatContextTokens,
 
   setDefaultTimeoutSeconds(seconds: number | undefined) {
     defaultTimeoutSeconds = seconds;

@@ -26,7 +26,6 @@ export interface FleetAgentSummary {
   currentTool?: string;
   lastAction?: string;
   progressPercent?: number;
-  contextWindow?: number;
   contextTokens?: number;
 }
 
@@ -72,31 +71,41 @@ function rightAligned(left: string, right: string, width: number): string {
 function formatDuration(agent: FleetAgentSummary): string {
   const end = agent.endTime ?? Date.now();
   const seconds = Math.max(0, Math.floor((end - agent.startTime) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${seconds % 60}s`;
+  if (seconds < 60) return `${String(seconds).padStart(2, "0")}s`;
+  if (seconds < 3600) {
+    const minutes = Math.floor(seconds / 60);
+    return `${String(minutes).padStart(2, "0")}m${String(seconds % 60).padStart(2, "0")}s`;
+  }
+  const hours = Math.floor(seconds / 3600);
+  return `${String(hours).padStart(2, "0")}h${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}m`;
 }
 
-/** Format token counts like Pi's status bar (e.g. `250k`, `1.5M`). */
-function formatTokens(count: number): string {
-  if (count < 1000) return String(count);
-  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
-  if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  return `${Math.round(count / 1_000_000)}M`;
+/** Format context tokens as zero-padded millions (e.g. `0.072Mt`), or "" when none reported yet. */
+function formatContextTokens(tokens: number | undefined): string {
+  if (tokens == null || !Number.isFinite(tokens) || tokens <= 0) return "";
+  return `${(tokens / 1_000_000).toFixed(3)}Mt`;
 }
 
-/** Format context usage like Pi's status bar (`28.8%/250k`, `?/250k`), or "" when the window is unknown. */
-function formatContextUsage(agent: {
-  contextWindow?: number;
-  contextTokens?: number;
-}): string {
-  const window = agent.contextWindow;
-  if (!window) return "";
-  const tokens = agent.contextTokens;
-  if (tokens == null) return `?/${formatTokens(window)}`;
-  const percent = (tokens / window) * 100;
-  return `${percent.toFixed(1)}%/${formatTokens(window)}`;
+/** Zero-pad a sub-agent id to at least two digits for roster alignment. */
+function formatAgentId(id: string): string {
+  return id.padStart(2, "0");
+}
+
+/** Combined right-side roster label: duration plus token count (`02m30s·0.072Mt`). */
+function formatRosterState(agent: FleetAgentSummary): string {
+  if (agent.status === "error") return "(error)";
+  if (agent.status === "interrupted") return "(stopped)";
+  const duration = formatDuration(agent);
+  const tokens = formatContextTokens(agent.contextTokens);
+  return tokens ? `${duration}·${tokens}` : duration;
+}
+
+/** Natural width a roster row needs to render without truncation. */
+function rosterRowWidth(agent: FleetAgentSummary): number {
+  const nameWidth = visibleWidth(agent.agentType ?? "agent");
+  const left = 6 + visibleWidth(formatAgentId(agent.id)) + 1 + nameWidth;
+  const right = visibleWidth(formatRosterState(agent));
+  return left + 1 + right;
 }
 
 function isSteerable(agent: FleetAgentSummary | undefined): boolean {
@@ -421,16 +430,12 @@ export class SubagentFleetComponent implements Component, Focusable {
         const marker =
           index === this.selected ? this.theme.fg("accent", "›") : " ";
         const name = agent.agentType ?? "agent";
-        const context = formatContextUsage(agent);
-        const state = context
-          ? context
-          : agent.status === "error"
-            ? "(error)"
-            : agent.status === "interrupted"
-              ? "(stopped)"
-              : formatDuration(agent);
-        const left = `${marker} ${statusGlyph(agent, this.theme)} ${agent.id} ${name}`;
-        return rightAligned(left, this.theme.fg("dim", state), width);
+        const left = `${marker} ${statusGlyph(agent, this.theme)} ${formatAgentId(agent.id)} ${name}`;
+        return rightAligned(
+          left,
+          this.theme.fg("dim", formatRosterState(agent)),
+          width,
+        );
       });
   }
 
@@ -484,8 +489,8 @@ export class SubagentFleetComponent implements Component, Focusable {
   private conversationLines(agent: FleetAgentDetail, width: number): string[] {
     const lines: string[] = [];
     const identity = `${agent.agentType ?? "agent"} · ${agent.model ?? "model unknown"}`;
-    const context = formatContextUsage(agent);
-    const state = `${statusGlyph(agent, this.theme)} ${agent.status} · ${formatDuration(agent)}${context ? ` · ${context}` : ""}`;
+    const tokens = formatContextTokens(agent.contextTokens);
+    const state = `${statusGlyph(agent, this.theme)} ${agent.status} · ${formatDuration(agent)}${tokens ? ` · ${tokens}` : ""}`;
     lines.push(
       rightAligned(
         this.theme.fg("muted", ` ${identity}`),
@@ -643,9 +648,15 @@ export class SubagentFleetComponent implements Component, Focusable {
     const innerWidth = width - 2;
     const rows = this.tui.terminal?.rows ?? 32;
     this.bodyHeight = Math.max(1, Math.min(42, Math.floor(rows * 0.9) - 8));
+    // Size the roster to fit the widest row (marker + glyph + id + name +
+    // duration + tokens) so nothing is clipped, capped to leave room for the
+    // detail pane.
+    const maxRowWidth = this.agents.length
+      ? Math.max(...this.agents.map(rosterRowWidth))
+      : 0;
     const rosterWidth = Math.max(
-      20,
-      Math.min(28, Math.floor((innerWidth - 1) * 0.28)),
+      24,
+      Math.min(40, Math.min(maxRowWidth, Math.floor((innerWidth - 1) * 0.45))),
     );
     const detailWidth = Math.max(1, innerWidth - rosterWidth - 1);
     const roster = this.rosterLines(rosterWidth);
