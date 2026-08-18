@@ -659,9 +659,9 @@ function notifyAgentCompletion(
   const resultText = agent.completionResult?.trim();
   const partialResult = agent.partialResult?.trim();
   const resultBlock = resultText
-    ? `\nresult:\n${resultText}`
+    ? `\n\n${resultText}`
     : partialResult
-      ? `\npartial result:\n${partialResult}`
+      ? `\n\n${partialResult}`
       : "";
   const failureBlock =
     agent.status === "error"

@@ -372,6 +372,8 @@ test("uses the completion tool result as the authoritative deliverable", () => {
   assert.equal(sent.length, 1);
   assert.ok(sent[0]?.content.startsWith("🤖✅"));
   assert.ok(!sent[0]?.content.includes("thinking="));
+  assert.ok(!sent[0]?.content.includes("result:"));
+  assert.ok(sent[0]?.content.includes("\n\nauthoritative result"));
   assert.equal(sent[0]?.details?.result, "authoritative result");
   assert.ok(sent[0]?.content.includes("authoritative result"));
   assert.ok(!sent[0]?.content.includes("report validation"));
