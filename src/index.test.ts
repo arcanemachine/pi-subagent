@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import extension, { __test } from "./index";
 import {
   SubagentFleetComponent,
@@ -150,6 +151,186 @@ test("spawns configured thinking levels and inherits the parent per spawn", asyn
   }
 });
 
+test("formats spawn output for agents and users", async () => {
+  __test.resetState();
+  const cwd = createProjectSettings({
+    worker: { model: "provider/worker" },
+  });
+  const tools: any[] = [];
+  const commands: any[] = [];
+  const renderers = new Map<string, any>();
+  const sentMessages: any[] = [];
+  const fakeProcess = {
+    kill() {},
+    on() {
+      return this;
+    },
+    stdin: {
+      destroyed: false,
+      write() {},
+      end() {},
+    },
+  } as unknown as ChildProcess;
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as never;
+
+  __test.setSpawnProcess(((command: string, args: string[]) => {
+    assert.equal(command, "pi");
+    assert.deepEqual(args.slice(0, 3), ["--mode", "rpc", "--no-session"]);
+    return fakeProcess;
+  }) as never);
+
+  try {
+    extension({
+      registerTool: (tool: any) => tools.push(tool),
+      registerCommand: (name: string, command: any) =>
+        commands.push({ name, command }),
+      registerMessageRenderer: (type: string, renderer: any) =>
+        renderers.set(type, renderer),
+      on() {},
+      sendMessage: (message: any) => sentMessages.push(message),
+      getThinkingLevel: () => "medium",
+    } as any);
+
+    const spawnTool = tools.find((tool) => tool.name === "subagent_spawn");
+    assert.ok(spawnTool);
+    assert.match(
+      spawnTool.parameters.properties.task.description,
+      /Markdown bullet points/,
+    );
+
+    const result = await spawnTool.execute(
+      "call-render",
+      {
+        agent: "worker",
+        task: "Implement the adapter\n\n- Read the contract\n- Run the tests\n\nDeliverable: results.json",
+        timeout_seconds: 600,
+      },
+      undefined,
+      undefined,
+      { cwd },
+    );
+    const parentText = result.content[0].text;
+    assert.ok(
+      parentText.startsWith("The sub-agent is now running in parallel."),
+    );
+    assert.ok(parentText.includes("Do NOT call subagent_status"));
+    assert.ok(
+      parentText.indexOf("Do NOT call") < parentText.indexOf("Agent ID:"),
+    );
+    assert.ok(!parentText.includes("Model:"));
+    assert.ok(!parentText.includes("Thinking level:"));
+
+    const compact = spawnTool.renderResult(
+      result,
+      { expanded: false, isPartial: false },
+      theme,
+      { isError: false },
+    );
+    const compactLines = compact.render(120);
+    assert.equal(compactLines.length, 1);
+    assert.equal(
+      compactLines[0],
+      "🤖🚀 Sub-agent 1 spawned | [worker] Implement the adapter",
+    );
+    const narrowCompact = compact.render(45);
+    assert.equal(narrowCompact.length, 1);
+    assert.ok(visibleWidth(narrowCompact[0] ?? "") <= 45);
+    const narrowText = (narrowCompact[0] ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+    assert.ok(narrowText.endsWith("..."));
+
+    initTheme(undefined, false);
+    const expanded = spawnTool.renderResult(
+      result,
+      { expanded: true, isPartial: false },
+      theme,
+      { isError: false },
+    );
+    const expandedText = expanded.render(120).join("\n");
+    const expandedPlain = expandedText.replace(/\x1b\[[0-9;]*m/g, "");
+    assert.ok(expandedPlain.includes("🤖🚀 Sub-agent spawned"));
+    assert.ok(expandedPlain.includes("Agent ID: 1"));
+    assert.ok(expandedPlain.includes("Agent type: worker"));
+    assert.ok(expandedPlain.includes("Timeout: 600s"));
+    assert.ok(expandedPlain.includes("- Read the contract"));
+    assert.ok(expandedPlain.includes("- Run the tests"));
+    assert.ok(expandedPlain.indexOf("Task:") < expandedPlain.indexOf("- Read"));
+    assert.ok(!expandedPlain.includes("The sub-agent is now running"));
+    assert.ok(!expandedPlain.includes("Model:"));
+    assert.ok(!expandedPlain.includes("Thinking level:"));
+
+    const subagentCommand = commands.find((entry) => entry.name === "subagent");
+    assert.ok(subagentCommand);
+    await subagentCommand.command.handler(
+      "spawn:worker timeout:600 Review the adapter",
+      {
+        cwd,
+        ui: { notify() {} },
+      },
+    );
+    assert.equal(sentMessages.length, 1);
+    assert.ok(
+      sentMessages[0].content.startsWith(
+        "The sub-agent is now running in parallel.",
+      ),
+    );
+    assert.equal(sentMessages[0].details.task, "Review the adapter");
+
+    const spawnRenderer = renderers.get("subagent-spawned");
+    assert.ok(spawnRenderer);
+    const messageCompact = spawnRenderer(
+      { content: parentText, details: result.details },
+      { expanded: false },
+      theme,
+    );
+    assert.ok(messageCompact.render(120).join("\n").includes(compactLines[0]));
+    const messageExpanded = spawnRenderer(
+      { content: parentText, details: result.details },
+      { expanded: true },
+      theme,
+    );
+    assert.ok(messageExpanded.render(120).join("\n").includes("Agent ID: 1"));
+    assert.ok(!messageExpanded.render(120).join("\n").includes("Do NOT call"));
+
+    const callComponent = spawnTool.renderCall(
+      { agent: "worker", task: "task" },
+      theme,
+      {} as never,
+    );
+    assert.deepEqual(callComponent.render(120), []);
+
+    const completionRenderer = renderers.get("subagent-complete");
+    assert.ok(completionRenderer);
+    for (const [status, icon] of [
+      ["completed", "🤖✅"],
+      ["error", "🤖❌"],
+      ["interrupted", "🤖⚠️"],
+    ]) {
+      const rendered = completionRenderer(
+        {
+          content: "completion",
+          details: {
+            agentId: "1",
+            agentType: "worker",
+            taskTitle: "task",
+            status,
+            durationSec: 1,
+          },
+        },
+        { expanded: false },
+        theme,
+      );
+      assert.ok(rendered.render(120).join("\n").includes(icon));
+    }
+  } finally {
+    __test.resetState();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("extracts text from a finalized assistant message", () => {
   assert.equal(
     __test.extractAssistantMessageText({
@@ -189,6 +370,8 @@ test("uses the completion tool result as the authoritative deliverable", () => {
 
   assert.equal(agent.status, "completed");
   assert.equal(sent.length, 1);
+  assert.ok(sent[0]?.content.startsWith("🤖✅"));
+  assert.ok(!sent[0]?.content.includes("thinking="));
   assert.equal(sent[0]?.details?.result, "authoritative result");
   assert.ok(sent[0]?.content.includes("authoritative result"));
   assert.ok(!sent[0]?.content.includes("report validation"));
@@ -265,6 +448,7 @@ test("missing results fail with narrower-task guidance", () => {
 
   assert.equal(agent.status, "error");
   assert.equal(agent.failureReason, "missing_result");
+  assert.ok(sent[0]?.content.startsWith("🤖❌"));
   assert.ok(sent[0]?.content.includes("simpler or more narrowly scoped task"));
 });
 
@@ -349,6 +533,7 @@ test("reload interruptions are reported once without triggering a turn", () => {
   assert.equal(sent[0]?.details?.status, "interrupted");
   assert.equal(sent[0]?.details?.interruptionReason, "reload");
   assert.equal(sent[0]?.options?.triggerTurn, false);
+  assert.ok(sent[0]?.content.startsWith("🤖⚠️"));
   assert.ok(sent[0]?.content.toLowerCase().includes("extension reload"));
   assert.ok(sent[0]?.content.includes("exit 143"));
   assert.ok(!sent[0]?.content.includes("narrowly scoped"));

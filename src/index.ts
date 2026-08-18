@@ -1,14 +1,25 @@
 import type {
+  AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
   Theme,
+  ThemeColor,
+  ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import {
   calculateContextTokens,
   getAgentDir,
   getMarkdownTheme,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Markdown, type Component, Text } from "@earendil-works/pi-tui";
+import {
+  Box,
+  Container,
+  Markdown,
+  Spacer,
+  Text,
+  truncateToWidth,
+  type Component,
+} from "@earendil-works/pi-tui";
 import { spawn, ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -129,6 +140,8 @@ type PiSubagentSettings = {
 const STALE_RUNNING_MS = 60_000;
 const EXTRA_SUBAGENT_INSTRUCTIONS =
   "Ensure that your work stays scoped to the assigned task.";
+const SUBAGENT_PARENT_GUIDANCE =
+  "The sub-agent is now running in parallel. Its completion message will be delivered automatically as a new turn — you do not need to check on it. Do NOT call subagent_status or any tool to poll for progress; that only wastes turns. Continue with other work for the user, or end your turn. Only call subagent_status if the user explicitly asks or you have reason to believe it is stuck.";
 
 let spawnProcess: typeof spawn = spawn;
 
@@ -392,6 +405,13 @@ function isAgentFinished(agent: SubAgent): boolean {
   );
 }
 
+function getSubagentStatusEmoji(status: SubAgent["status"]): string {
+  if (status === "interrupted") return "🤖⚠️";
+  if (status === "error") return "🤖❌";
+  if (status === "completed") return "🤖✅";
+  return "🤖🚀";
+}
+
 function transitionAgentStatus(
   agent: SubAgent,
   nextStatus: SubAgent["status"],
@@ -627,12 +647,7 @@ function notifyAgentCompletion(
     0,
     Math.round(((agent.endTime || Date.now()) - agent.startTime) / 1000),
   );
-  const statusEmoji =
-    agent.status === "completed"
-      ? "✅"
-      : agent.status === "interrupted"
-        ? "⚠️"
-        : "❌";
+  const statusEmoji = getSubagentStatusEmoji(agent.status);
   const statusText =
     agent.status === "completed"
       ? "completed"
@@ -660,8 +675,7 @@ function notifyAgentCompletion(
 
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
-      ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}` +
-      ` | thinking=${agent.thinkingLevel}${exitText}` +
+      ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}` +
       failureBlock +
       resultBlock,
     {
@@ -1367,6 +1381,140 @@ function createFleetDataSource(): FleetDataSource {
 
 type MessageContent = string | Array<{ type: string; text?: string }>;
 
+type SubagentSpawnPresentation = {
+  agentId?: string;
+  agentType?: string;
+  task?: string;
+  taskTitle?: string;
+  timeoutSeconds?: number;
+};
+
+function buildSubagentSpawnDetails(agent: SubAgent): SubagentSpawnPresentation {
+  return {
+    agentId: agent.id,
+    agentType: agent.agentType,
+    task: agent.task,
+    taskTitle: agent.taskTitle,
+    timeoutSeconds: agent.timeoutSeconds,
+  };
+}
+
+function formatSubagentTimeout(timeoutSeconds?: number): string {
+  return timeoutSeconds ? `${timeoutSeconds}s` : "(none)";
+}
+
+function formatSubagentSpawnMessage(agent: SubAgent): string {
+  return [
+    SUBAGENT_PARENT_GUIDANCE,
+    "",
+    "🤖🚀 Sub-agent spawned",
+    "",
+    `Agent ID: ${agent.id}`,
+    `Agent type: ${agent.agentType || "(unknown)"}`,
+    `Timeout: ${formatSubagentTimeout(agent.timeoutSeconds)}`,
+    "",
+    "Task:",
+    agent.task,
+  ].join("\n");
+}
+
+function getSubagentSpawnText(content: MessageContent): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((item) => item.type === "text")
+    .map((item) => item.text || "")
+    .join("\n");
+}
+
+function getSubagentSpawnTaskTitle(details: SubagentSpawnPresentation): string {
+  return details.taskTitle || getTaskTitle(details.task || "");
+}
+
+function renderCompactSubagentSpawn(
+  details: SubagentSpawnPresentation,
+  theme: Theme,
+  textColor: ThemeColor,
+): Component {
+  const title = getSubagentSpawnTaskTitle(details);
+  const text =
+    `🤖🚀 Sub-agent ${details.agentId || "?"} spawned` +
+    ` | [${details.agentType || "unknown"}] ${title}`;
+
+  return {
+    render(width: number): string[] {
+      return [truncateToWidth(theme.fg(textColor, text), width, "...")];
+    },
+    invalidate() {},
+  };
+}
+
+function renderExpandedSubagentSpawn(
+  details: SubagentSpawnPresentation,
+  theme: Theme,
+  textColor: ThemeColor,
+): Component {
+  const container = new Container();
+  container.addChild(
+    new Text(theme.fg("toolTitle", theme.bold("🤖🚀 Sub-agent spawned")), 0, 0),
+  );
+  container.addChild(new Spacer(1));
+  container.addChild(
+    new Text(theme.fg(textColor, `Agent ID: ${details.agentId || "?"}`), 0, 0),
+  );
+  container.addChild(
+    new Text(
+      theme.fg(textColor, `Agent type: ${details.agentType || "(unknown)"}`),
+      0,
+      0,
+    ),
+  );
+  container.addChild(
+    new Text(
+      theme.fg(
+        textColor,
+        `Timeout: ${formatSubagentTimeout(details.timeoutSeconds)}`,
+      ),
+      0,
+      0,
+    ),
+  );
+  container.addChild(new Spacer(1));
+  container.addChild(
+    new Text(theme.fg("toolTitle", theme.bold("Task:")), 0, 0),
+  );
+  container.addChild(
+    new Markdown(details.task || "(empty task)", 0, 0, getMarkdownTheme(), {
+      color: (text: string) => theme.fg(textColor, text),
+    }),
+  );
+  return container;
+}
+
+function renderSubagentSpawnContent(
+  details: SubagentSpawnPresentation,
+  expanded: boolean,
+  theme: Theme,
+  textColor: ThemeColor,
+): Component {
+  return expanded
+    ? renderExpandedSubagentSpawn(details, theme, textColor)
+    : renderCompactSubagentSpawn(details, theme, textColor);
+}
+
+function renderSubagentSpawnMessage(
+  details: SubagentSpawnPresentation,
+  expanded: boolean,
+  theme: Theme,
+): Component {
+  const box = new Box(1, 1, (text: string) =>
+    theme.bg("customMessageBg", text),
+  );
+  box.addChild(
+    renderSubagentSpawnContent(details, expanded, theme, "customMessageText"),
+  );
+  return box;
+}
+
 /**
  * Render a sub-agent custom message as a Ctrl+O-collapsible block.
  * Collapsed shows a concise one-liner; expanded shows the full message content.
@@ -1381,13 +1529,7 @@ function renderSubagentMessage(
 ): Component {
   const box = new Box(1, 1, (t: string) => theme.bg("customMessageBg", t));
   if (expanded) {
-    const text =
-      typeof content === "string"
-        ? content
-        : content
-            .filter((c) => c.type === "text")
-            .map((c) => c.text || "")
-            .join("\n");
+    const text = getSubagentSpawnText(content);
     box.addChild(
       new Markdown(text, 0, 0, getMarkdownTheme(), {
         color: (t: string) => theme.fg("customMessageText", t),
@@ -1408,10 +1550,7 @@ type SubagentCompleteDetails = {
   durationSec?: number;
 };
 
-type SubagentSpawnedDetails = {
-  agentId?: string;
-  agentType?: string;
-  taskTitle?: string;
+type SubagentSpawnedDetails = SubagentSpawnPresentation & {
   thinkingLevel?: ThinkingLevel;
 };
 
@@ -1512,17 +1651,19 @@ export default function (pi: ExtensionAPI) {
         : isError
           ? "errored"
           : "completed";
-      const emoji = isInterrupted ? "⚠️" : isError ? "❌" : "✅";
+      const status = isInterrupted
+        ? "interrupted"
+        : isError
+          ? "error"
+          : "completed";
+      const emoji = getSubagentStatusEmoji(status);
       const duration =
         typeof details?.durationSec === "number"
           ? `${details.durationSec}s`
           : "?";
       const agentType = details?.agentType || "unknown";
       const taskTitle = details?.taskTitle || "(untitled task)";
-      const thinkingLevel = details?.thinkingLevel
-        ? ` | thinking=${details.thinkingLevel}`
-        : "";
-      const collapsed = `${emoji} Sub-agent ${details?.agentId ?? "?"} ${statusText} in ${duration} | [${agentType}] ${taskTitle}${thinkingLevel}`;
+      const collapsed = `${emoji} Sub-agent ${details?.agentId ?? "?"} ${statusText} in ${duration} | [${agentType}] ${taskTitle}`;
       return renderSubagentMessage(message.content, expanded, collapsed, theme);
     },
   );
@@ -1533,13 +1674,18 @@ export default function (pi: ExtensionAPI) {
       const details = (message.details ?? undefined) as
         | SubagentSpawnedDetails
         | undefined;
-      const agentType = details?.agentType || "unknown";
-      const taskTitle = details?.taskTitle || "(untitled task)";
-      const thinkingLevel = details?.thinkingLevel
-        ? ` | thinking=${details.thinkingLevel}`
-        : "";
-      const collapsed = `🚀 Sub-agent ${details?.agentId ?? "?"} | [${agentType}] ${taskTitle}${thinkingLevel}`;
-      return renderSubagentMessage(message.content, expanded, collapsed, theme);
+      if (!details || !Object.prototype.hasOwnProperty.call(details, "task")) {
+        const agentType = details?.agentType || "unknown";
+        const taskTitle = details?.taskTitle || "(untitled task)";
+        const collapsed = `🤖🚀 Sub-agent ${details?.agentId ?? "?"} spawned | [${agentType}] ${taskTitle}`;
+        return renderSubagentMessage(
+          message.content,
+          expanded,
+          collapsed,
+          theme,
+        );
+      }
+      return renderSubagentSpawnMessage(details, expanded, theme);
     },
   );
 
@@ -1640,18 +1786,10 @@ export default function (pi: ExtensionAPI) {
           // Send a message to the conversation showing what was spawned
           pi.sendMessage({
             customType: "subagent-spawned",
-            content:
-              `🚀 Spawned sub-agent ${agent.id}\n\n` +
-              `Agent type: ${agent.agentType || "(unknown)"}\n` +
-              `Task: ${agent.task}\n` +
-              `Model: ${agent.model || "(unknown)"}\n` +
-              `Thinking level: ${agent.thinkingLevel}\n` +
-              `Timeout: ${agent.timeoutSeconds ? `${agent.timeoutSeconds}s` : "(none)"}`,
+            content: formatSubagentSpawnMessage(agent),
             display: true,
             details: {
-              agentId: agent.id,
-              agentType: agent.agentType,
-              taskTitle: agent.taskTitle,
+              ...buildSubagentSpawnDetails(agent),
               thinkingLevel: agent.thinkingLevel,
             },
           });
@@ -1781,7 +1919,8 @@ export default function (pi: ExtensionAPI) {
       properties: {
         task: {
           type: "string",
-          description: "Clear, specific task for the sub-agent to complete",
+          description:
+            "Clear, specific task for the sub-agent to complete. Prefer a concise opening summary followed by short Markdown bullet points for distinct requirements when useful. When useful, include a brief deliverable section describing the expected final response or artifacts.",
         },
         agent: {
           type: "string",
@@ -1854,32 +1993,35 @@ export default function (pi: ExtensionAPI) {
       );
 
       return {
-        content: [
-          {
-            type: "text",
-            text:
-              `🚀 Spawned sub-agent **${agent.id}**\n` +
-              `Task: ${agent.task}\n` +
-              `Agent type: ${agent.agentType || "(unknown)"}\n` +
-              `Model: ${agent.model || "(unknown)"}\n` +
-              `Thinking level: ${agent.thinkingLevel}\n` +
-              `Timeout: ${agent.timeoutSeconds ? `${agent.timeoutSeconds}s` : "(none)"}\n\n` +
-              `The sub-agent is now running in parallel. Its completion message will be delivered to you automatically as a new turn — you do not need to check on it. ` +
-              `Do NOT call subagent_status (or any tool) to poll for progress; that only wastes turns. ` +
-              `Continue with other work for the user, or end your turn. ` +
-              `Only call subagent_status if the user explicitly asks or you have reason to believe it is stuck.`,
-          },
-        ],
+        content: [{ type: "text", text: formatSubagentSpawnMessage(agent) }],
         details: {
-          agentId: agent.id,
-          task: agent.task,
-          taskTitle: agent.taskTitle,
-          agentType: agent.agentType,
+          ...buildSubagentSpawnDetails(agent),
           model: agent.model,
           thinkingLevel: agent.thinkingLevel,
-          timeoutSeconds: agent.timeoutSeconds,
         },
       };
+    },
+    renderCall() {
+      return new Container();
+    },
+    renderResult(
+      result: AgentToolResult<unknown>,
+      { expanded, isPartial }: ToolRenderResultOptions,
+      theme: Theme,
+      context: { isError: boolean },
+    ) {
+      if (isPartial) {
+        return new Text(theme.fg("muted", "🤖🚀 Starting sub-agent..."), 0, 0);
+      }
+
+      const details = result.details as SubagentSpawnPresentation | undefined;
+      if (!details || !Object.prototype.hasOwnProperty.call(details, "task")) {
+        const text = getSubagentSpawnText(result.content as MessageContent);
+        const color: ThemeColor = context.isError ? "error" : "toolOutput";
+        return new Text(theme.fg(color, text || "(no output)"), 0, 0);
+      }
+
+      return renderSubagentSpawnContent(details, expanded, theme, "toolOutput");
     },
   });
 
