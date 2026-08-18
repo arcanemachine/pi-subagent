@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import extension, { __test } from "./index";
 import {
@@ -37,6 +40,115 @@ function captureCompletions() {
   );
   return sent;
 }
+
+function createProjectSettings(agents: Record<string, unknown>): string {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-subagent-test-"));
+  mkdirSync(join(cwd, ".pi"));
+  writeFileSync(
+    join(cwd, ".pi", "settings.json"),
+    JSON.stringify({ "pi-subagent": { agents } }),
+  );
+  return cwd;
+}
+
+test("normalizes supported thinking levels and preserves explicit off", () => {
+  const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+  for (const level of levels) {
+    assert.equal(__test.normalizeThinkingLevel(level), level);
+  }
+  assert.equal(__test.normalizeThinkingLevel(" HIGH "), "high");
+  assert.equal(__test.normalizeThinkingLevel("unsupported"), undefined);
+  assert.equal(__test.normalizeThinkingLevel(42), undefined);
+  assert.equal(
+    __test.resolveThinkingLevel({ model: "provider/model" }, "medium"),
+    "medium",
+  );
+  assert.equal(
+    __test.resolveThinkingLevel(
+      { model: "provider/model", thinking_level: "off" },
+      "high",
+    ),
+    "off",
+  );
+});
+
+test("spawns configured thinking levels and inherits the parent per spawn", async () => {
+  __test.resetState();
+  let parentThinkingLevel = "low";
+  const cwd = createProjectSettings({
+    configured: {
+      model: "provider/configured",
+      thinking_level: "high",
+    },
+    inherited: { model: "provider/inherited" },
+    disabled: { model: "provider/disabled", thinking_level: "off" },
+  });
+  const spawnCalls: Array<{ command: string; args: string[] }> = [];
+  const fakeProcess = {
+    kill() {},
+    on() {
+      return this;
+    },
+    stdin: {
+      destroyed: false,
+      write() {},
+      end() {},
+    },
+  } as unknown as ChildProcess;
+  const tools: any[] = [];
+  const extensionApi = {
+    registerTool: (tool: any) => tools.push(tool),
+    registerCommand() {},
+    registerMessageRenderer() {},
+    on() {},
+    sendMessage() {},
+    getThinkingLevel: () => parentThinkingLevel,
+  };
+
+  __test.setSpawnProcess(((command: string, args: string[]) => {
+    spawnCalls.push({ command, args });
+    return fakeProcess;
+  }) as never);
+
+  try {
+    extension(extensionApi as any);
+    const spawnTool = tools.find((tool) => tool.name === "subagent_spawn");
+    assert.ok(spawnTool);
+
+    const spawn = async (agent: string) =>
+      spawnTool.execute(
+        `call-${agent}`,
+        { task: "test task", agent },
+        undefined,
+        undefined,
+        { cwd },
+      );
+
+    const configuredResult = await spawn("configured");
+    parentThinkingLevel = "medium";
+    const inheritedResult = await spawn("inherited");
+    parentThinkingLevel = "high";
+    const disabledResult = await spawn("disabled");
+
+    assert.deepEqual(
+      spawnCalls.map(({ command, args }) => ({
+        command,
+        args: args.slice(-2),
+      })),
+      [
+        { command: "pi", args: ["--thinking", "high"] },
+        { command: "pi", args: ["--thinking", "medium"] },
+        { command: "pi", args: ["--thinking", "off"] },
+      ],
+    );
+    assert.equal(configuredResult.details.thinkingLevel, "high");
+    assert.equal(inheritedResult.details.thinkingLevel, "medium");
+    assert.equal(disabledResult.details.thinkingLevel, "off");
+  } finally {
+    __test.resetState();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test("extracts text from a finalized assistant message", () => {
   assert.equal(

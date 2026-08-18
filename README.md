@@ -59,7 +59,7 @@ ln -s /path/to/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
 - `subagent_status` - Get structured current status (`agent_id` optional)
 - `subagent_steer` - Send follow-up guidance to one running sub-agent or all of them
 - `subagent_kill` - Kill a specific sub-agent by ID
-- `subagent_list_types` - List configured agent types (name/model/when_to_use)
+- `subagent_list_types` - List configured agent types (name/model/thinking level/when_to_use)
 
 Child sub-agents receive a dedicated `subagent_complete` tool with one required `result` field. A successful call submits the complete deliverable and gracefully shuts down the child process; failed calls can be corrected and retried. If a child omits the tool, its final assistant response is used as a fallback so useful work is not discarded over formatting. Empty, errored, aborted, or truncated responses are reported as failures. Completed sub-agents are automatically removed from active tracking.
 
@@ -72,7 +72,8 @@ Sub-agent model selection is strict and uses configured agent types only:
 1. Command syntax: `/subagent spawn:<agent> <task>`
 2. Tool syntax: provide `agent` for each sub-agent task
 3. Resolve `agent` from `"pi-subagent".agents[agent].model`
-4. If `extra_context` is configured for that agent, it is prepended to the task prompt sent to the sub-agent
+4. Resolve the child thinking level from `thinking_level` when configured, otherwise inherit the parent's current thinking level
+5. If `extra_context` is configured for that agent, it is prepended to the task prompt sent to the sub-agent
 
 There is no model override parameter and no fallback to legacy `"pi-subagent".model`.
 
@@ -85,7 +86,7 @@ Use the main pi settings files:
 
 Project settings override global settings.
 
-Example (`extra_context`, `max_active_subagents`, `default_timeout_seconds`, and `allow_nested_subagents` are optional):
+Example (`thinking_level`, `extra_context`, `max_active_subagents`, `default_timeout_seconds`, and `allow_nested_subagents` are optional):
 
 ```json
 {
@@ -100,6 +101,7 @@ Example (`extra_context`, `max_active_subagents`, `default_timeout_seconds`, and
       },
       "example2": {
         "model": "provider/some-other-model",
+        "thinking_level": "high",
         "when_to_use": "For example task type 2",
         "extra_context": "Think carefully and prefer correctness over speed."
       },
@@ -114,6 +116,8 @@ Example (`extra_context`, `max_active_subagents`, `default_timeout_seconds`, and
 ```
 
 Replace `example1`, `example2`, and `example3` with keys you actually configure. The tool descriptions use these same placeholder names so the model does not mistake them for built-in agent types.
+
+`thinking_level` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. If omitted, the child inherits the parent's current effective thinking level at spawn time. Pi may clamp a requested level when the selected child model does not support it.
 
 Project settings override global settings by agent key. `max_active_subagents` is an optional hard cap on concurrently running sub-agents; spawn requests above the configured cap are rejected (not queued). If omitted, concurrency is unlimited.
 

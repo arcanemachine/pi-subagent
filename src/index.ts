@@ -19,6 +19,25 @@ import {
   type FleetDataSource,
 } from "./fleet";
 
+type ThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
+const THINKING_LEVELS = new Set<ThinkingLevel>([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
 interface SubAgent {
   id: string;
   process: ChildProcess;
@@ -26,6 +45,7 @@ interface SubAgent {
   taskTitle: string;
   agentType?: string;
   model?: string;
+  thinkingLevel: ThinkingLevel;
   extraContext?: string;
   status: "starting" | "running" | "completed" | "error" | "interrupted";
   activity: string[];
@@ -94,6 +114,7 @@ let timeoutEscalationDelayMs = 30000;
 
 type SubagentProfile = {
   model: string;
+  thinking_level?: ThinkingLevel;
   when_to_use?: string;
   extra_context?: string;
 };
@@ -108,6 +129,8 @@ type PiSubagentSettings = {
 const STALE_RUNNING_MS = 60_000;
 const EXTRA_SUBAGENT_INSTRUCTIONS =
   "Ensure that your work stays scoped to the assigned task.";
+
+let spawnProcess: typeof spawn = spawn;
 
 const SUBAGENT_COMPLETION_INSTRUCTIONS = `Do the requested task only; do not expand scope. If the task is too large, complete the highest-value slice and clearly state what remains.
 
@@ -159,6 +182,36 @@ function normalizeAllowNestedSubagents(raw: unknown): boolean | undefined {
   return raw;
 }
 
+function normalizeThinkingLevel(raw: unknown): ThinkingLevel | undefined {
+  if (typeof raw !== "string") return undefined;
+  const normalized = raw.trim().toLowerCase();
+  return THINKING_LEVELS.has(normalized as ThinkingLevel)
+    ? (normalized as ThinkingLevel)
+    : undefined;
+}
+
+function resolveThinkingLevel(
+  profile: SubagentProfile,
+  parentThinkingLevel: ThinkingLevel,
+): ThinkingLevel {
+  return profile.thinking_level ?? parentThinkingLevel;
+}
+
+function buildSubAgentArgs(
+  model: string,
+  thinkingLevel: ThinkingLevel,
+): string[] {
+  return [
+    "--mode",
+    "rpc",
+    "--no-session",
+    "--model",
+    model,
+    "--thinking",
+    thinkingLevel,
+  ];
+}
+
 function isTruthyEnv(value: string | undefined): boolean {
   if (!value) return false;
   const normalized = value.trim().toLowerCase();
@@ -208,12 +261,14 @@ function getPiSubagentSettings(cwd: string): PiSubagentSettings {
 
     const configObject = agentConfig as Record<string, unknown>;
     const modelValue = configObject.model;
+    const thinkingLevelValue = configObject.thinking_level;
     const whenToUseValue = configObject.when_to_use;
     const extraContextValue = configObject.extra_context;
     const model = typeof modelValue === "string" ? modelValue.trim() : "";
 
     if (!model) continue;
 
+    const thinkingLevel = normalizeThinkingLevel(thinkingLevelValue);
     const whenToUse =
       typeof whenToUseValue === "string" ? whenToUseValue.trim() : undefined;
     const extraContext =
@@ -223,6 +278,7 @@ function getPiSubagentSettings(cwd: string): PiSubagentSettings {
 
     mergedAgents[agentName] = {
       model,
+      ...(thinkingLevel ? { thinking_level: thinkingLevel } : {}),
       ...(whenToUse ? { when_to_use: whenToUse } : {}),
       ...(extraContext ? { extra_context: extraContext } : {}),
     };
@@ -604,7 +660,8 @@ function notifyAgentCompletion(
 
   sendCompletionMessage?.(
     `${statusEmoji} Sub-agent ${agent.id} ${statusText} in ${durationSec}s` +
-      ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}${exitText}` +
+      ` | [${agent.agentType || "unknown"}] ${agent.taskTitle}` +
+      ` | thinking=${agent.thinkingLevel}${exitText}` +
       failureBlock +
       resultBlock,
     {
@@ -613,6 +670,7 @@ function notifyAgentCompletion(
       taskTitle: agent.taskTitle,
       agentType: agent.agentType,
       model: agent.model,
+      thinkingLevel: agent.thinkingLevel,
       durationSec,
       exitCode: agent.exitCode,
       timedOut: !!agent.timeoutNotified,
@@ -834,12 +892,13 @@ function spawnSubAgent(
   task: string,
   model: string,
   agentType: string,
+  thinkingLevel: ThinkingLevel,
   extraContext?: string,
   timeoutSecondsOverride?: number,
 ): SubAgent {
   const id = String(nextAgentId++);
 
-  const args = ["--mode", "rpc", "--no-session", "--model", model];
+  const args = buildSubAgentArgs(model, thinkingLevel);
 
   const childEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -849,7 +908,7 @@ function spawnSubAgent(
     childEnv.PI_SUBAGENT_DISABLE_RECURSION = "1";
   }
 
-  const proc = spawn("pi", args, {
+  const proc = spawnProcess("pi", args, {
     stdio: ["pipe", "pipe", "pipe"],
     detached: false,
     env: childEnv,
@@ -862,6 +921,7 @@ function spawnSubAgent(
     taskTitle: getTaskTitle(task),
     agentType,
     model,
+    thinkingLevel,
     extraContext,
     status: "starting",
     activity: [],
@@ -1018,6 +1078,7 @@ function buildAgentStatusSnapshot(agent: SubAgent) {
   return {
     id: agent.id,
     status: agent.status,
+    thinkingLevel: agent.thinkingLevel,
     task: agent.task,
     taskTitle: agent.taskTitle,
     agentType: agent.agentType || "(unknown)",
@@ -1054,6 +1115,7 @@ function buildCompactAgentStatusSnapshot(agent: SubAgent) {
     etaConfidence: snapshot.etaConfidence,
     contextTokens: snapshot.contextTokens,
     contextTokensDisplay: snapshot.contextTokensDisplay,
+    thinkingLevel: snapshot.thinkingLevel,
   };
 }
 
@@ -1342,6 +1404,7 @@ type SubagentCompleteDetails = {
   status?: "completed" | "error" | "interrupted" | string;
   taskTitle?: string;
   agentType?: string;
+  thinkingLevel?: ThinkingLevel;
   durationSec?: number;
 };
 
@@ -1349,6 +1412,7 @@ type SubagentSpawnedDetails = {
   agentId?: string;
   agentType?: string;
   taskTitle?: string;
+  thinkingLevel?: ThinkingLevel;
 };
 
 export default function (pi: ExtensionAPI) {
@@ -1455,7 +1519,10 @@ export default function (pi: ExtensionAPI) {
           : "?";
       const agentType = details?.agentType || "unknown";
       const taskTitle = details?.taskTitle || "(untitled task)";
-      const collapsed = `${emoji} Sub-agent ${details?.agentId ?? "?"} ${statusText} in ${duration} | [${agentType}] ${taskTitle}`;
+      const thinkingLevel = details?.thinkingLevel
+        ? ` | thinking=${details.thinkingLevel}`
+        : "";
+      const collapsed = `${emoji} Sub-agent ${details?.agentId ?? "?"} ${statusText} in ${duration} | [${agentType}] ${taskTitle}${thinkingLevel}`;
       return renderSubagentMessage(message.content, expanded, collapsed, theme);
     },
   );
@@ -1468,7 +1535,10 @@ export default function (pi: ExtensionAPI) {
         | undefined;
       const agentType = details?.agentType || "unknown";
       const taskTitle = details?.taskTitle || "(untitled task)";
-      const collapsed = `🚀 Sub-agent ${details?.agentId ?? "?"} | [${agentType}] ${taskTitle}`;
+      const thinkingLevel = details?.thinkingLevel
+        ? ` | thinking=${details.thinkingLevel}`
+        : "";
+      const collapsed = `🚀 Sub-agent ${details?.agentId ?? "?"} | [${agentType}] ${taskTitle}${thinkingLevel}`;
       return renderSubagentMessage(message.content, expanded, collapsed, theme);
     },
   );
@@ -1553,10 +1623,15 @@ export default function (pi: ExtensionAPI) {
           }
 
           const profile = resolveSubagentProfile(agentType, ctx);
+          const thinkingLevel = resolveThinkingLevel(
+            profile,
+            pi.getThinkingLevel(),
+          );
           const agent = spawnSubAgent(
             taskText,
             profile.model,
             agentType,
+            thinkingLevel,
             profile.extra_context,
             manualTimeoutSeconds,
           );
@@ -1570,12 +1645,14 @@ export default function (pi: ExtensionAPI) {
               `Agent type: ${agent.agentType || "(unknown)"}\n` +
               `Task: ${agent.task}\n` +
               `Model: ${agent.model || "(unknown)"}\n` +
+              `Thinking level: ${agent.thinkingLevel}\n` +
               `Timeout: ${agent.timeoutSeconds ? `${agent.timeoutSeconds}s` : "(none)"}`,
             display: true,
             details: {
               agentId: agent.id,
               agentType: agent.agentType,
               taskTitle: agent.taskTitle,
+              thinkingLevel: agent.thinkingLevel,
             },
           });
         } catch (error: unknown) {
@@ -1763,10 +1840,15 @@ export default function (pi: ExtensionAPI) {
       }
 
       const profile = resolveSubagentProfile(params.agent, ctx);
+      const thinkingLevel = resolveThinkingLevel(
+        profile,
+        pi.getThinkingLevel(),
+      );
       const agent = spawnSubAgent(
         params.task,
         profile.model,
         params.agent,
+        thinkingLevel,
         profile.extra_context,
         manualTimeoutSeconds,
       );
@@ -1780,6 +1862,7 @@ export default function (pi: ExtensionAPI) {
               `Task: ${agent.task}\n` +
               `Agent type: ${agent.agentType || "(unknown)"}\n` +
               `Model: ${agent.model || "(unknown)"}\n` +
+              `Thinking level: ${agent.thinkingLevel}\n` +
               `Timeout: ${agent.timeoutSeconds ? `${agent.timeoutSeconds}s` : "(none)"}\n\n` +
               `The sub-agent is now running in parallel. Its completion message will be delivered to you automatically as a new turn — you do not need to check on it. ` +
               `Do NOT call subagent_status (or any tool) to poll for progress; that only wastes turns. ` +
@@ -1793,6 +1876,7 @@ export default function (pi: ExtensionAPI) {
           taskTitle: agent.taskTitle,
           agentType: agent.agentType,
           model: agent.model,
+          thinkingLevel: agent.thinkingLevel,
           timeoutSeconds: agent.timeoutSeconds,
         },
       };
@@ -2073,7 +2157,8 @@ export default function (pi: ExtensionAPI) {
 
       const lines = entries.map(({ name, profile }) => {
         const whenToUse = profile.when_to_use || "(not provided)";
-        return `- ${name}\n  model: ${profile.model}\n  when_to_use: ${whenToUse}`;
+        const thinkingLevel = profile.thinking_level || "inherit";
+        return `- ${name}\n  model: ${profile.model}\n  thinking_level: ${thinkingLevel}\n  when_to_use: ${whenToUse}`;
       });
 
       return {
@@ -2087,6 +2172,7 @@ export default function (pi: ExtensionAPI) {
           agents: entries.map(({ name, profile }) => ({
             name,
             model: profile.model,
+            thinkingLevel: profile.thinking_level || "inherit",
             whenToUse: profile.when_to_use,
           })),
         },
@@ -2146,6 +2232,7 @@ export const __test = {
     nextAgentId = 1;
     defaultTimeoutSeconds = 180;
     sendCompletionMessage = null;
+    spawnProcess = spawn;
   },
 
   extractAssistantMessageText,
@@ -2155,6 +2242,9 @@ export const __test = {
   interruptSubAgentForReload,
   terminateSubAgentWithoutNotification,
   formatContextTokens,
+  normalizeThinkingLevel,
+  resolveThinkingLevel,
+  buildSubAgentArgs,
 
   setDefaultTimeoutSeconds(seconds: number | undefined) {
     defaultTimeoutSeconds = seconds;
@@ -2192,6 +2282,7 @@ export const __test = {
       process: mockProcess,
       task: "test task",
       taskTitle: "test task",
+      thinkingLevel: "off",
       status: "running",
       activity: [],
       currentResponsePreview: "",
@@ -2208,4 +2299,7 @@ export const __test = {
   scheduleSubAgentTimeout,
   notifyAgentCompletion,
   createFleetDataSource,
+  setSpawnProcess(processSpawner: typeof spawn) {
+    spawnProcess = processSpawner;
+  },
 };
