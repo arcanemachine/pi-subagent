@@ -1436,13 +1436,13 @@ function renderCompactSubagentSpawn(
   textColor: ThemeColor,
 ): Component {
   const title = getSubagentSpawnTaskTitle(details);
-  const text =
-    `🤖🚀 Sub-agent ${details.agentId || "?"} spawned` +
-    ` | [${details.agentType || "unknown"}] ${title}`;
+  const status = `🤖🚀 Sub-agent ${details.agentId || "?"} spawned`;
+  const metadata = ` | [${details.agentType || "unknown"}] ${title}`;
+  const text = theme.fg("accent", status) + theme.fg(textColor, metadata);
 
   return {
     render(width: number): string[] {
-      return [truncateToWidth(theme.fg(textColor, text), width, "...")];
+      return [truncateToWidth(text, width, "...")];
     },
     invalidate() {},
   };
@@ -1455,7 +1455,7 @@ function renderExpandedSubagentSpawn(
 ): Component {
   const container = new Container();
   container.addChild(
-    new Text(theme.fg("toolTitle", theme.bold("🤖🚀 Sub-agent spawned")), 0, 0),
+    new Text(theme.fg("accent", theme.bold("🤖🚀 Sub-agent spawned")), 0, 0),
   );
   container.addChild(new Spacer(1));
   container.addChild(
@@ -1553,6 +1553,55 @@ type SubagentCompleteDetails = {
 type SubagentSpawnedDetails = SubagentSpawnPresentation & {
   thinkingLevel?: ThinkingLevel;
 };
+
+function getCompletionStatus(
+  details: SubagentCompleteDetails | undefined,
+): "completed" | "error" | "interrupted" {
+  if (details?.status === "error") return "error";
+  if (details?.status === "interrupted") return "interrupted";
+  return "completed";
+}
+
+function getCompletionStatusColor(
+  status: "completed" | "error" | "interrupted",
+): ThemeColor {
+  if (status === "error") return "error";
+  if (status === "interrupted") return "warning";
+  return "success";
+}
+
+function renderSubagentCompletionMessage(
+  content: MessageContent,
+  expanded: boolean,
+  collapsedLine: string,
+  details: SubagentCompleteDetails | undefined,
+  theme: Theme,
+): Component {
+  const status = getCompletionStatus(details);
+  const statusColor = getCompletionStatusColor(status);
+  const background = status === "error" ? "toolErrorBg" : "customMessageBg";
+  const box = new Box(1, 1, (text: string) => theme.bg(background, text));
+
+  if (!expanded) {
+    box.addChild(new Text(theme.fg(statusColor, collapsedLine), 0, 0));
+    return box;
+  }
+
+  const text = getSubagentSpawnText(content);
+  const firstNewline = text.indexOf("\n");
+  const header = firstNewline < 0 ? text : text.slice(0, firstNewline);
+  const body = firstNewline < 0 ? "" : text.slice(firstNewline + 1).trimStart();
+  box.addChild(new Text(theme.fg(statusColor, header), 0, 0));
+  if (body) {
+    box.addChild(new Spacer(1));
+    box.addChild(
+      new Markdown(body, 0, 0, getMarkdownTheme(), {
+        color: (value: string) => theme.fg("customMessageText", value),
+      }),
+    );
+  }
+  return box;
+}
 
 export default function (pi: ExtensionAPI) {
   if (isTruthyEnv(process.env.PI_SUBAGENT_CHILD)) {
@@ -1664,7 +1713,13 @@ export default function (pi: ExtensionAPI) {
       const agentType = details?.agentType || "unknown";
       const taskTitle = details?.taskTitle || "(untitled task)";
       const collapsed = `${emoji} Sub-agent ${details?.agentId ?? "?"} ${statusText} in ${duration} | [${agentType}] ${taskTitle}`;
-      return renderSubagentMessage(message.content, expanded, collapsed, theme);
+      return renderSubagentCompletionMessage(
+        message.content,
+        expanded,
+        collapsed,
+        details,
+        theme,
+      );
     },
   );
 
