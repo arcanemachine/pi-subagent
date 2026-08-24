@@ -128,6 +128,7 @@ type SubagentProfile = {
   thinking_level?: ThinkingLevel;
   when_to_use?: string;
   extra_context?: string;
+  fork?: string;
 };
 
 type PiSubagentSettings = {
@@ -150,16 +151,40 @@ const SUBAGENT_COMPLETION_INSTRUCTIONS = `Do the requested task only; do not exp
 When finished or blocked, call the \`subagent_complete\` tool with the complete deliverable for the parent in its \`result\` field. A successful call should be your final action. If the tool returns an error, correct the result and call it again. The result may use normal Markdown and should include evidence, changed files, commands, or open questions only when relevant. Do not include planning or process narration.
 
 If the completion tool is unavailable, return the complete deliverable as your final response instead.`;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function readJsonFile(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
 
   try {
     const raw = readFileSync(path, "utf-8");
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return isRecord(parsed) ? parsed : {};
   } catch {
     return {};
   }
+}
+
+/** Match Pi settings semantics: nested records merge, other values replace. */
+function deepMergeRecords(
+  base: Record<string, unknown>,
+  overrides: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...base };
+
+  for (const [key, overrideValue] of Object.entries(overrides)) {
+    if (overrideValue === undefined) continue;
+
+    const baseValue = merged[key];
+    merged[key] =
+      isRecord(baseValue) && isRecord(overrideValue)
+        ? deepMergeRecords(baseValue, overrideValue)
+        : overrideValue;
+  }
+
+  return merged;
 }
 
 function normalizeMaxActiveSubagents(raw: unknown): number | undefined {
@@ -213,11 +238,12 @@ function resolveThinkingLevel(
 function buildSubAgentArgs(
   model: string,
   thinkingLevel: ThinkingLevel,
+  fork?: string,
 ): string[] {
   return [
     "--mode",
     "rpc",
-    "--no-session",
+    ...(fork ? ["--fork", fork] : ["--no-session"]),
     "--model",
     model,
     "--thinking",
@@ -231,105 +257,85 @@ function isTruthyEnv(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
-function getPiSubagentSettings(cwd: string): PiSubagentSettings {
+function getPiSubagentSettings(
+  cwd: string,
+  projectTrusted = true,
+): PiSubagentSettings {
   const globalSettingsPath = join(getAgentDir(), "settings.json");
   const projectSettingsPath = join(cwd, ".pi", "settings.json");
 
   const globalSettings = readJsonFile(globalSettingsPath);
-  const projectSettings = readJsonFile(projectSettingsPath);
+  const projectSettings = projectTrusted
+    ? readJsonFile(projectSettingsPath)
+    : {};
 
-  const globalSubagent = globalSettings["pi-subagent"];
-  const projectSubagent = projectSettings["pi-subagent"];
+  const globalSubagent = isRecord(globalSettings["pi-subagent"])
+    ? globalSettings["pi-subagent"]
+    : {};
+  const projectSubagent = isRecord(projectSettings["pi-subagent"])
+    ? projectSettings["pi-subagent"]
+    : {};
+  const mergedSubagent = deepMergeRecords(globalSubagent, projectSubagent);
+  const mergedAgentsValue = mergedSubagent.agents;
+  const mergedAgents = isRecord(mergedAgentsValue) ? mergedAgentsValue : {};
+  const normalizedAgents: Record<string, SubagentProfile> = {};
 
-  const globalSubagentObj =
-    globalSubagent && typeof globalSubagent === "object"
-      ? (globalSubagent as Record<string, unknown>)
-      : {};
+  for (const [agentName, agentConfig] of Object.entries(mergedAgents)) {
+    if (!isRecord(agentConfig)) continue;
 
-  const projectSubagentObj =
-    projectSubagent && typeof projectSubagent === "object"
-      ? (projectSubagent as Record<string, unknown>)
-      : {};
-
-  const globalAgentsValue = globalSubagentObj.agents;
-  const projectAgentsValue = projectSubagentObj.agents;
-
-  const globalAgents =
-    globalAgentsValue && typeof globalAgentsValue === "object"
-      ? (globalAgentsValue as Record<string, unknown>)
-      : {};
-
-  const projectAgents =
-    projectAgentsValue && typeof projectAgentsValue === "object"
-      ? (projectAgentsValue as Record<string, unknown>)
-      : {};
-
-  const mergedAgents: Record<string, SubagentProfile> = {};
-
-  for (const [agentName, agentConfig] of [
-    ...Object.entries(globalAgents),
-    ...Object.entries(projectAgents),
-  ]) {
-    if (!agentConfig || typeof agentConfig !== "object") continue;
-
-    const configObject = agentConfig as Record<string, unknown>;
-    const modelValue = configObject.model;
-    const thinkingLevelValue = configObject.thinking_level;
-    const whenToUseValue = configObject.when_to_use;
-    const extraContextValue = configObject.extra_context;
-    const model = typeof modelValue === "string" ? modelValue.trim() : "";
-
+    const model =
+      typeof agentConfig.model === "string" ? agentConfig.model.trim() : "";
     if (!model) continue;
 
-    const thinkingLevel = normalizeThinkingLevel(thinkingLevelValue);
+    const thinkingLevel = normalizeThinkingLevel(agentConfig.thinking_level);
     const whenToUse =
-      typeof whenToUseValue === "string" ? whenToUseValue.trim() : undefined;
+      typeof agentConfig.when_to_use === "string"
+        ? agentConfig.when_to_use.trim()
+        : undefined;
     const extraContext =
-      typeof extraContextValue === "string"
-        ? extraContextValue.trim()
+      typeof agentConfig.extra_context === "string"
+        ? agentConfig.extra_context.trim()
+        : undefined;
+    const fork =
+      typeof agentConfig.fork === "string"
+        ? agentConfig.fork.trim()
         : undefined;
 
-    mergedAgents[agentName] = {
+    normalizedAgents[agentName] = {
       model,
       ...(thinkingLevel ? { thinking_level: thinkingLevel } : {}),
       ...(whenToUse ? { when_to_use: whenToUse } : {}),
       ...(extraContext ? { extra_context: extraContext } : {}),
+      ...(fork ? { fork } : {}),
     };
   }
 
-  const projectMaxActive = normalizeMaxActiveSubagents(
-    projectSubagentObj.max_active_subagents,
-  );
-  const globalMaxActive = normalizeMaxActiveSubagents(
-    globalSubagentObj.max_active_subagents,
-  );
-
-  const projectDefaultTimeoutSeconds = normalizeDefaultTimeoutSeconds(
-    projectSubagentObj.default_timeout_seconds,
-  );
-  const globalDefaultTimeoutSeconds = normalizeDefaultTimeoutSeconds(
-    globalSubagentObj.default_timeout_seconds,
-  );
-
-  const projectAllowNestedSubagents = normalizeAllowNestedSubagents(
-    projectSubagentObj.allow_nested_subagents,
-  );
-  const globalAllowNestedSubagents = normalizeAllowNestedSubagents(
-    globalSubagentObj.allow_nested_subagents,
-  );
-
   return {
-    agents: mergedAgents,
-    max_active_subagents: projectMaxActive ?? globalMaxActive,
-    default_timeout_seconds:
-      projectDefaultTimeoutSeconds ?? globalDefaultTimeoutSeconds,
+    agents: normalizedAgents,
+    max_active_subagents: normalizeMaxActiveSubagents(
+      mergedSubagent.max_active_subagents,
+    ),
+    default_timeout_seconds: normalizeDefaultTimeoutSeconds(
+      mergedSubagent.default_timeout_seconds,
+    ),
     allow_nested_subagents:
-      projectAllowNestedSubagents ?? globalAllowNestedSubagents ?? false,
+      normalizeAllowNestedSubagents(mergedSubagent.allow_nested_subagents) ??
+      false,
   };
 }
 
-function refreshConfiguredAgents(cwd: string): void {
-  const settings = getPiSubagentSettings(cwd);
+function projectSettingsAreTrusted(
+  ctx: ExtensionContext | null | undefined,
+): boolean {
+  const trustAwareContext = ctx as
+    | (ExtensionContext & { isProjectTrusted?: () => boolean })
+    | null
+    | undefined;
+  return trustAwareContext?.isProjectTrusted?.() ?? true;
+}
+
+function refreshConfiguredAgents(cwd: string, projectTrusted = true): void {
+  const settings = getPiSubagentSettings(cwd, projectTrusted);
   configuredAgents = settings.agents || {};
   maxActiveSubagents = settings.max_active_subagents;
   defaultTimeoutSeconds = settings.default_timeout_seconds ?? 180;
@@ -345,7 +351,10 @@ function resolveSubagentProfile(
     throw new Error("Missing agent type");
   }
 
-  refreshConfiguredAgents(ctx?.cwd ?? process.cwd());
+  refreshConfiguredAgents(
+    ctx?.cwd ?? process.cwd(),
+    projectSettingsAreTrusted(ctx),
+  );
   const profile = configuredAgents[normalizedAgentName];
   if (profile) return profile;
 
@@ -363,7 +372,10 @@ function resolveSubagentProfile(
 function getConfiguredAgentEntries(
   ctx: ExtensionContext | null | undefined,
 ): Array<{ name: string; profile: SubagentProfile }> {
-  refreshConfiguredAgents(ctx?.cwd ?? process.cwd());
+  refreshConfiguredAgents(
+    ctx?.cwd ?? process.cwd(),
+    projectSettingsAreTrusted(ctx),
+  );
   return Object.entries(configuredAgents)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, profile]) => ({ name, profile }));
@@ -909,10 +921,12 @@ function spawnSubAgent(
   thinkingLevel: ThinkingLevel,
   extraContext?: string,
   timeoutSecondsOverride?: number,
+  fork?: string,
+  cwd = process.cwd(),
 ): SubAgent {
   const id = String(nextAgentId++);
 
-  const args = buildSubAgentArgs(model, thinkingLevel);
+  const args = buildSubAgentArgs(model, thinkingLevel, fork);
 
   const childEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -923,6 +937,7 @@ function spawnSubAgent(
   }
 
   const proc = spawnProcess("pi", args, {
+    cwd,
     stdio: ["pipe", "pipe", "pipe"],
     detached: false,
     env: childEnv,
@@ -1037,9 +1052,10 @@ function getActiveAgentCount(): number {
 
 function getStatusText(): string {
   const activeCount = getActiveAgentCount();
-  if (!maxActiveSubagents) return `active subagents: ${activeCount}`;
-
-  return `active subagents: ${activeCount}/${maxActiveSubagents}`;
+  const countText = maxActiveSubagents
+    ? `${activeCount}/${maxActiveSubagents}`
+    : `${activeCount}`;
+  return `active subagents: ${countText} 🤖 `;
 }
 
 function getSpawnLimitErrorMessage(attemptedCount = 1): string | null {
@@ -1748,7 +1764,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("subagent", {
     description: "Spawn and manage sub-agents",
     getArgumentCompletions: (prefix: string) => {
-      refreshConfiguredAgents(currentCtx?.cwd ?? process.cwd());
+      refreshConfiguredAgents(
+        currentCtx?.cwd ?? process.cwd(),
+        projectSettingsAreTrusted(currentCtx),
+      );
 
       const baseItems = [
         { value: "fleet", label: "fleet — Open the live sub-agent window" },
@@ -1782,7 +1801,7 @@ export default function (pi: ExtensionAPI) {
       return items.filter((i) => i.value.startsWith(commandPrefix));
     },
     handler: async (args: string, ctx) => {
-      refreshConfiguredAgents(ctx.cwd);
+      refreshConfiguredAgents(ctx.cwd, projectSettingsAreTrusted(ctx));
       const trimmedArgs = args.trim() || "fleet";
       const [subcommand, ...rest] = trimmedArgs.split(/\s+/);
       const subArgs = rest.join(" ");
@@ -1835,6 +1854,8 @@ export default function (pi: ExtensionAPI) {
             thinkingLevel,
             profile.extra_context,
             manualTimeoutSeconds,
+            profile.fork,
+            ctx.cwd,
           );
           ctx.ui.notify(`Spawned sub-agent ${agent.id}`, "info");
 
@@ -1997,7 +2018,7 @@ export default function (pi: ExtensionAPI) {
       onUpdate,
       ctx,
     ) {
-      refreshConfiguredAgents(ctx.cwd);
+      refreshConfiguredAgents(ctx.cwd, projectSettingsAreTrusted(ctx));
 
       const limitError = getSpawnLimitErrorMessage(1);
       if (limitError) {
@@ -2045,6 +2066,8 @@ export default function (pi: ExtensionAPI) {
         thinkingLevel,
         profile.extra_context,
         manualTimeoutSeconds,
+        profile.fork,
+        ctx.cwd,
       );
 
       return {
@@ -2399,7 +2422,7 @@ export default function (pi: ExtensionAPI) {
   // Set up status on session start
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
-    refreshConfiguredAgents(ctx.cwd);
+    refreshConfiguredAgents(ctx.cwd, projectSettingsAreTrusted(ctx));
     updateSubAgentStatus();
   });
 
@@ -2427,7 +2450,10 @@ export const __test = {
     activeAgents.clear();
     recentFleetAgents.clear();
     nextAgentId = 1;
+    configuredAgents = {};
+    maxActiveSubagents = undefined;
     defaultTimeoutSeconds = 180;
+    allowNestedSubagents = false;
     sendCompletionMessage = null;
     spawnProcess = spawn;
   },
@@ -2441,10 +2467,17 @@ export const __test = {
   formatContextTokens,
   normalizeThinkingLevel,
   resolveThinkingLevel,
+  deepMergeRecords,
+  getPiSubagentSettings,
   buildSubAgentArgs,
+  getStatusText,
 
   setDefaultTimeoutSeconds(seconds: number | undefined) {
     defaultTimeoutSeconds = seconds;
+  },
+
+  setMaxActiveSubagents(max: number | undefined) {
+    maxActiveSubagents = max;
   },
 
   setTimeoutEscalationDelayMs(delayMs: number) {

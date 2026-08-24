@@ -74,8 +74,9 @@ Sub-agent model selection is strict and uses configured agent types only:
 3. Resolve `agent` from `"pi-subagent".agents[agent].model`
 4. Resolve the child thinking level from `thinking_level` when configured, otherwise inherit the parent's current thinking level
 5. If `extra_context` is configured for that agent, it is prepended to the task prompt sent to the sub-agent
+6. If `fork` is configured for that agent, the child starts from that Pi session or snapshot
 
-There is no model override parameter and no fallback to legacy `"pi-subagent".model`.
+There is no model or fork override parameter and no fallback to legacy `"pi-subagent".model`.
 
 ### Configuration (`settings.json`)
 
@@ -84,9 +85,9 @@ Use the main pi settings files:
 - Global: `~/.pi/agent/settings.json`
 - Project: `.pi/settings.json`
 
-Project settings override global settings.
+Project settings are deep-merged with global settings; project values take precedence.
 
-Example (`thinking_level`, `extra_context`, `max_active_subagents`, `default_timeout_seconds`, and `allow_nested_subagents` are optional):
+Example (`thinking_level`, `extra_context`, `fork`, `max_active_subagents`, `default_timeout_seconds`, and `allow_nested_subagents` are optional):
 
 ```json
 {
@@ -109,6 +110,11 @@ Example (`thinking_level`, `extra_context`, `max_active_subagents`, `default_tim
         "model": "provider/yet-another-model",
         "when_to_use": "For example task type 3",
         "extra_context": "Focus on correctness, edge cases, and actionable fixes."
+      },
+      "snapshot_worker": {
+        "model": "provider/snapshot-model",
+        "fork": "~/.pi/agent/pi-session-snapshot/baseline.jsonl",
+        "when_to_use": "For tasks that need the baseline session context"
       }
     }
   }
@@ -119,11 +125,13 @@ Replace `example1`, `example2`, and `example3` with keys you actually configure.
 
 `thinking_level` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. If omitted, the child inherits the parent's current effective thinking level at spawn time. Pi may clamp a requested level when the selected child model does not support it.
 
-Project settings override global settings by agent key. `max_active_subagents` is an optional hard cap on concurrently running sub-agents; spawn requests above the configured cap are rejected (not queued). If omitted, concurrency is unlimited.
+Project settings are deep-merged with global settings by property and agent key. Project-local settings are used only for trusted projects. `max_active_subagents` is an optional hard cap on concurrently running sub-agents; spawn requests above the configured cap are rejected (not queued). If omitted, concurrency is unlimited.
 
 `default_timeout_seconds` controls an automatic timeout notification for each spawned sub-agent. When the timeout is reached, the parent sends guidance asking the sub-agent to report progress so far and finish up. The default is 180 seconds.
 
 `allow_nested_subagents` controls whether spawned sub-agents can use this extension's own sub-agent tools. Default is `false` (nested sub-agents disabled). Set to `true` only if you explicitly want recursive fan-out.
+
+`fork` accepts the same path or session ID as Pi's native `--fork` option. Relative paths are resolved from the project working directory. Forked agents cannot use `--no-session`, so they create a persistent child session containing the configured source context. A snapshot created by `pi-session-snapshot` can be used directly as the JSONL source.
 
 ### Interactive Window
 

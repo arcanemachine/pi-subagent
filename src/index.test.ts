@@ -52,6 +52,113 @@ function createProjectSettings(agents: Record<string, unknown>): string {
   return cwd;
 }
 
+function createAgentSettingsDir(settings: Record<string, unknown>): string {
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-subagent-agent-"));
+  writeFileSync(join(agentDir, "settings.json"), JSON.stringify(settings));
+  return agentDir;
+}
+
+test("deep merges global and trusted project sub-agent settings", () => {
+  const agentDir = createAgentSettingsDir({
+    "pi-subagent": {
+      max_active_subagents: 5,
+      agents: {
+        global: {
+          model: "provider/global",
+          thinking_level: "high",
+          when_to_use: "global guidance",
+          extra_context: "global context",
+          fork: "global-session",
+        },
+        retained: { model: "provider/retained" },
+      },
+    },
+  });
+  const cwd = createProjectSettings({
+    global: {
+      extra_context: "project context",
+      fork: "project-session",
+    },
+    project: { model: "provider/project" },
+  });
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+
+  try {
+    assert.deepEqual(__test.getPiSubagentSettings(cwd, true), {
+      max_active_subagents: 5,
+      default_timeout_seconds: undefined,
+      allow_nested_subagents: false,
+      agents: {
+        global: {
+          model: "provider/global",
+          thinking_level: "high",
+          when_to_use: "global guidance",
+          extra_context: "project context",
+          fork: "project-session",
+        },
+        retained: { model: "provider/retained" },
+        project: { model: "provider/project" },
+      },
+    });
+
+    assert.deepEqual(__test.getPiSubagentSettings(cwd, false).agents, {
+      global: {
+        model: "provider/global",
+        thinking_level: "high",
+        when_to_use: "global guidance",
+        extra_context: "global context",
+        fork: "global-session",
+      },
+      retained: { model: "provider/retained" },
+    });
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("deepMergeRecords replaces non-record values and merges nested records", () => {
+  assert.deepEqual(
+    __test.deepMergeRecords(
+      { nested: { inherited: true }, list: ["global"], value: "global" },
+      { nested: { override: true }, list: ["project"], value: "project" },
+    ),
+    {
+      nested: { inherited: true, override: true },
+      list: ["project"],
+      value: "project",
+    },
+  );
+});
+
+test("builds persistent fork arguments without no-session", () => {
+  assert.deepEqual(__test.buildSubAgentArgs("provider/model", "high"), [
+    "--mode",
+    "rpc",
+    "--no-session",
+    "--model",
+    "provider/model",
+    "--thinking",
+    "high",
+  ]);
+  assert.deepEqual(
+    __test.buildSubAgentArgs("provider/model", "high", "~/.pi/snapshot.jsonl"),
+    [
+      "--mode",
+      "rpc",
+      "--fork",
+      "~/.pi/snapshot.jsonl",
+      "--model",
+      "provider/model",
+      "--thinking",
+      "high",
+    ],
+  );
+});
+
 test("normalizes supported thinking levels and preserves explicit off", () => {
   const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
   for (const level of levels) {
@@ -84,7 +191,11 @@ test("spawns configured thinking levels and inherits the parent per spawn", asyn
     inherited: { model: "provider/inherited" },
     disabled: { model: "provider/disabled", thinking_level: "off" },
   });
-  const spawnCalls: Array<{ command: string; args: string[] }> = [];
+  const spawnCalls: Array<{
+    command: string;
+    args: string[];
+    options?: { cwd?: string };
+  }> = [];
   const fakeProcess = {
     kill() {},
     on() {
@@ -106,8 +217,12 @@ test("spawns configured thinking levels and inherits the parent per spawn", asyn
     getThinkingLevel: () => parentThinkingLevel,
   };
 
-  __test.setSpawnProcess(((command: string, args: string[]) => {
-    spawnCalls.push({ command, args });
+  __test.setSpawnProcess(((
+    command: string,
+    args: string[],
+    options?: { cwd?: string },
+  ) => {
+    spawnCalls.push({ command, args, options });
     return fakeProcess;
   }) as never);
 
@@ -145,10 +260,113 @@ test("spawns configured thinking levels and inherits the parent per spawn", asyn
     assert.equal(configuredResult.details.thinkingLevel, "high");
     assert.equal(inheritedResult.details.thinkingLevel, "medium");
     assert.equal(disabledResult.details.thinkingLevel, "off");
+    assert.ok(spawnCalls.every(({ options }) => options?.cwd === cwd));
   } finally {
     __test.resetState();
     rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+test("spawns configured fork sessions from the project cwd", async () => {
+  __test.resetState();
+  const cwd = createProjectSettings({
+    worker: {
+      model: "provider/worker",
+      fork: "~/.pi/agent/pi-session-snapshot/baseline.jsonl",
+    },
+  });
+  const spawnCalls: Array<{
+    command: string;
+    args: string[];
+    options?: { cwd?: string };
+  }> = [];
+  const fakeProcess = {
+    kill() {},
+    on() {
+      return this;
+    },
+    stdin: {
+      destroyed: false,
+      write() {},
+      end() {},
+    },
+  } as unknown as ChildProcess;
+  const tools: any[] = [];
+
+  __test.setSpawnProcess(((
+    command: string,
+    args: string[],
+    options?: { cwd?: string },
+  ) => {
+    spawnCalls.push({ command, args, options });
+    return fakeProcess;
+  }) as never);
+
+  try {
+    extension({
+      registerTool: (tool: any) => tools.push(tool),
+      registerCommand() {},
+      registerMessageRenderer() {},
+      on() {},
+      sendMessage() {},
+      getThinkingLevel: () => "medium",
+    } as any);
+
+    const spawnTool = tools.find((tool) => tool.name === "subagent_spawn");
+    assert.ok(spawnTool);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        spawnTool.parameters.properties,
+        "fork",
+      ),
+      false,
+    );
+
+    await spawnTool.execute(
+      "call-fork",
+      { task: "use the snapshot context", agent: "worker" },
+      undefined,
+      undefined,
+      { cwd, isProjectTrusted: () => true },
+    );
+
+    assert.equal(spawnCalls.length, 1);
+    assert.deepEqual(
+      {
+        command: spawnCalls[0]?.command,
+        args: spawnCalls[0]?.args,
+      },
+      {
+        command: "pi",
+        args: [
+          "--mode",
+          "rpc",
+          "--fork",
+          "~/.pi/agent/pi-session-snapshot/baseline.jsonl",
+          "--model",
+          "provider/worker",
+          "--thinking",
+          "medium",
+        ],
+      },
+    );
+    assert.equal(spawnCalls[0]?.options?.cwd, cwd);
+  } finally {
+    __test.resetState();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("active status includes the robot suffix and trailing space", () => {
+  __test.resetState();
+  __test.setMaxActiveSubagents(5);
+  __test.addMockAgent("T-status");
+
+  assert.equal(__test.getStatusText(), "active subagents: 1/5 🤖 ");
+
+  __test.resetState();
+  __test.addMockAgent("T-status-unlimited");
+  assert.equal(__test.getStatusText(), "active subagents: 1 🤖 ");
 });
 
 test("formats spawn output for agents and users", async () => {
