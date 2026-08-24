@@ -19,8 +19,8 @@
     "format": "prettier --write src/index.ts src/index.test.ts README.md"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.0",
-    "@earendil-works/pi-tui": "^0.74.0",
+    "@earendil-works/pi-coding-agent": "^0.84.1",
+    "@earendil-works/pi-tui": "^0.84.1",
     "@types/node": "^25.3.3",
     "prettier": "^3.8.3",
     "tsx": "^4.20.6",
