@@ -1986,27 +1986,25 @@ export default function (pi: ExtensionAPI) {
     name: "subagent_spawn",
     label: "Spawn Sub-Agent",
     description:
-      "Spawn a sub-agent to work on a task in parallel. " +
-      "`agent` is required and must match a configured key in settings `pi-subagent.agents`. " +
-      "Returns immediately; a completion message is delivered automatically as a new turn when the sub-agent finishes. " +
-      "Do NOT call subagent_status (or any tool) to poll; that only wastes turns. Continue other work or end your turn. Only check status if the user asks or you suspect a stall.",
+      "Spawn a configured sub-agent to work in parallel; returns immediately.",
+    promptGuidelines: [
+      "Sub-agents complete asynchronously and notify automatically; do not poll unless the user requests an update or a stall is suspected.",
+    ],
     parameters: {
       type: "object",
       properties: {
         task: {
           type: "string",
           description:
-            "Clear, specific task for the sub-agent to complete. Prefer a concise opening summary followed by short Markdown bullet points for distinct requirements when useful. When useful, include a brief deliverable section describing the expected final response or artifacts.",
+            "Self-contained, specific assignment stating the expected deliverable.",
         },
         agent: {
           type: "string",
-          description:
-            "Configured sub-agent type key from `pi-subagent.agents` (for example: example1, example2). Use a key that is actually configured; these are only placeholders.",
+          description: "Configured key from `pi-subagent.agents`.",
         },
         timeout_seconds: {
           type: "number",
-          description:
-            "Optional per-run timeout in seconds. Overrides default timeout for this sub-agent only.",
+          description: "Optional timeout in seconds for this run.",
         },
       },
       required: ["task", "agent"],
@@ -2108,15 +2106,16 @@ export default function (pi: ExtensionAPI) {
     name: "subagent_status",
     label: "Sub-Agent Status",
     description:
-      "Get current sub-agent status for one agent (`agent_id`) or all when omitted. " +
-      "Only call when the user explicitly asks for an update or you suspect a sub-agent is stuck — it returns nothing the automatic completion message won't already deliver. " +
-      'Do NOT call it to "check in" while waiting; repeated idle calls waste turns. Wait for automatic completion messages instead.',
+      "Get status for one sub-agent, or all when agent_id is omitted.",
+    promptGuidelines: [
+      "Sub-agents complete asynchronously and notify automatically; do not poll unless the user requests an update or a stall is suspected.",
+    ],
     parameters: {
       type: "object",
       properties: {
         agent_id: {
           type: "string",
-          description: "Optional sub-agent ID to inspect",
+          description: "Sub-agent ID; omit for all",
         },
       },
       required: [],
@@ -2192,20 +2191,17 @@ export default function (pi: ExtensionAPI) {
     name: "subagent_steer",
     label: "Steer Sub-Agent",
     description:
-      "Send guidance to a running sub-agent by ID, or use `all` to steer every running sub-agent with a per-agent delivery summary. " +
-      "Use to redirect sub-agents that are drifting from scope, answer a question they asked, or steer them toward finishing. " +
-      "Prefer this over killing and re-spawning when sub-agents are still making progress but on the wrong track.",
+      "Guide one running sub-agent, or use `all`; prefer steering over replacing an agent still making progress.",
     parameters: {
       type: "object",
       properties: {
         agent_id: {
           type: "string",
-          description:
-            "The sub-agent ID to steer, or `all` for every running sub-agent",
+          description: "Sub-agent ID, or `all`",
         },
         text: {
           type: "string",
-          description: "Guidance text to send to the running sub-agent",
+          description: "Guidance to send",
         },
       },
       required: ["agent_id", "text"],
@@ -2292,7 +2288,7 @@ export default function (pi: ExtensionAPI) {
       properties: {
         agent_id: {
           type: "string",
-          description: "The sub-agent ID to terminate",
+          description: "Sub-agent ID",
         },
       },
       required: ["agent_id"],
@@ -2347,7 +2343,7 @@ export default function (pi: ExtensionAPI) {
     name: "subagent_list_types",
     label: "List Sub-Agent Types",
     description:
-      "List configured sub-agent types from `pi-subagent.agents`, including model and usage metadata.",
+      "List configured sub-agent types with model and usage metadata.",
     parameters: {
       type: "object",
       properties: {},

@@ -417,7 +417,11 @@ test("formats spawn output for agents and users", async () => {
     assert.ok(spawnTool);
     assert.match(
       spawnTool.parameters.properties.task.description,
-      /Markdown bullet points/,
+      /self-contained.*expected deliverable/i,
+    );
+    assert.match(
+      spawnTool.promptGuidelines?.join("\n") ?? "",
+      /complete asynchronously.*notify automatically.*do not poll/i,
     );
 
     const result = await spawnTool.execute(
