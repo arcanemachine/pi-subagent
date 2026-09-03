@@ -1635,8 +1635,8 @@ function renderCompactSubagentSteer(
       ? ` (${details.sent}/${details.targeted})`
       : "";
   const status = isError
-    ? ` 🤖 Guidance failed${guidance ? `: ${guidance}` : ""}`
-    : ` 🤖 Sent guidance${count}${guidance ? `: ${guidance}` : ""}`;
+    ? ` 🤖🛞 Guidance failed${guidance ? `: ${guidance}` : ""}`
+    : ` 🤖🛞 Sent guidance${count}${guidance ? `: ${guidance}` : ""}`;
   const text =
     theme.fg("toolTitle", theme.bold("subagent_steer")) +
     theme.fg(isError ? "error" : "toolOutput", status);
@@ -2326,7 +2326,7 @@ export default function (pi: ExtensionAPI) {
     },
     renderResult(result, { expanded, isPartial }, theme, context) {
       if (isPartial) {
-        return new Text(theme.fg("muted", "🤖 Steering..."), 0, 0);
+        return new Text(theme.fg("muted", "🤖🛞 Steering..."), 0, 0);
       }
       return renderSubagentSteerResult(
         result,

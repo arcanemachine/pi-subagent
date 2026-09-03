@@ -990,7 +990,7 @@ test("registers the supported command surface and steers all agents", async () =
   assert.equal(compactSteerLines.length, 1);
   assert.equal(
     compactSteerLines[0],
-    "subagent_steer 🤖 Sent guidance (2/3): Stop expanding scope",
+    "subagent_steer 🤖🛞 Sent guidance (2/3): Stop expanding scope",
   );
   const narrowSteer = compactSteer.render(45)[0] ?? "";
   assert.ok(visibleWidth(narrowSteer) <= 45);
@@ -1027,7 +1027,7 @@ test("registers the supported command surface and steers all agents", async () =
   );
   assert.deepEqual(
     partialSteer.render(120).map((line: string) => line.trimEnd()),
-    ["🤖 Steering..."],
+    ["🤖🛞 Steering..."],
   );
 
   const notifications: Array<{ message: string; level: string }> = [];
