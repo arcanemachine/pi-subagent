@@ -142,7 +142,7 @@ const STALE_RUNNING_MS = 60_000;
 const EXTRA_SUBAGENT_INSTRUCTIONS =
   "Ensure that your work stays scoped to the assigned task.";
 const SUBAGENT_PARENT_GUIDANCE =
-  "The sub-agent is now running in parallel. Its completion message will be delivered automatically as a new turn — you do not need to check on it. Do NOT call subagent_status or any tool to poll for progress; that only wastes turns. Continue with other work for the user, or end your turn. Only call subagent_status if the user explicitly asks or you have reason to believe it is stuck.";
+  "The sub-agent is now running in parallel. Its completion message will be delivered automatically as a new turn. Never poll for progress or completion by any means, including status checks, sleep commands, or wait loops. Continue with other work for the user, or end your turn.";
 
 let spawnProcess: typeof spawn = spawn;
 
@@ -2098,7 +2098,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Spawn a configured sub-agent to work in parallel; returns immediately.",
     promptGuidelines: [
-      "Sub-agents complete asynchronously and notify automatically; do not poll unless the user requests an update or a stall is suspected.",
+      "Sub-agents complete asynchronously and notify automatically; never poll for progress or completion by any means, including status checks, sleep commands, or wait loops.",
     ],
     parameters: {
       type: "object",
@@ -2218,7 +2218,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Get status for one sub-agent, or all when agent_id is omitted.",
     promptGuidelines: [
-      "Sub-agents complete asynchronously and notify automatically; do not poll unless the user requests an update or a stall is suspected.",
+      "Sub-agents complete asynchronously and notify automatically; never poll for progress or completion by any means, including status checks, sleep commands, or wait loops.",
     ],
     parameters: {
       type: "object",

@@ -110,7 +110,7 @@ These tools let Pi manage sub-agents from the conversation. You normally do not 
 | `subagent_status`     | Inspect structured live status when an update is needed     |
 | `subagent_kill`       | Stop one running sub-agent                                  |
 
-Sub-agents report completion automatically, so Pi does not need to poll `subagent_status` while waiting. Use status checks when you ask for an update or there is reason to suspect a stall.
+Sub-agents report completion automatically. Pi should never poll for progress or completion by any means, including status checks, sleep commands, or wait loops; `subagent_status` remains available for a one-time inspection rather than repeated waiting.
 
 ## Configuration
 

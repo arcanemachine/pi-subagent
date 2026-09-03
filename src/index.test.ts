@@ -421,7 +421,7 @@ test("formats spawn output for agents and users", async () => {
     );
     assert.match(
       spawnTool.promptGuidelines?.join("\n") ?? "",
-      /complete asynchronously.*notify automatically.*do not poll/i,
+      /complete asynchronously.*notify automatically.*never poll.*by any means/i,
     );
 
     const result = await spawnTool.execute(
@@ -439,9 +439,12 @@ test("formats spawn output for agents and users", async () => {
     assert.ok(
       parentText.startsWith("The sub-agent is now running in parallel."),
     );
-    assert.ok(parentText.includes("Do NOT call subagent_status"));
     assert.ok(
-      parentText.indexOf("Do NOT call") < parentText.indexOf("Agent ID:"),
+      parentText.includes("Never poll for progress or completion by any means"),
+    );
+    assert.ok(!parentText.includes("subagent_status"));
+    assert.ok(
+      parentText.indexOf("Never poll") < parentText.indexOf("Agent ID:"),
     );
     assert.ok(!parentText.includes("Model:"));
     assert.ok(!parentText.includes("Thinking level:"));
