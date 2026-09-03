@@ -9,7 +9,8 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/arcanemachine/pi-subagent/main/logo.jpg"
   },
   "scripts": {
     "build": "tsc",
@@ -37,6 +38,7 @@
   "files": [
     "src",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "logo.jpg"
   ]
 }

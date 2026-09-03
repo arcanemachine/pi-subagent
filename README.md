@@ -1,5 +1,9 @@
 # pi-subagent
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/arcanemachine/pi-subagent/main/logo.jpg" alt="pi-subagent logo" width="250" />
+</p>
+
 A pi extension that enables spawning sub-agents via RPC for parallel task execution.
 
 ## Features
