@@ -4,7 +4,12 @@
   "description": "Pi extension for spawning sub-agents via RPC for parallel task execution",
   "type": "module",
   "keywords": [
-    "pi-package"
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package",
+    "subagent",
+    "agents"
   ],
   "pi": {
     "extensions": [
@@ -17,7 +22,22 @@
     "watch": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/index.test.ts",
-    "format": "prettier --write src/index.ts src/index.test.ts README.md"
+    "format": "prettier --write src/**/*.ts package.json README.md",
+    "format:check": "prettier --check src/**/*.ts package.json README.md",
+    "prepublishOnly": "npm run format:check && npm run typecheck && npm run test && npm run build"
+  },
+  "author": "Nicholas Moen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arcanemachine/pi-subagent.git"
+  },
+  "homepage": "https://github.com/arcanemachine/pi-subagent#readme",
+  "bugs": {
+    "url": "https://github.com/arcanemachine/pi-subagent/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.1",
@@ -28,10 +48,14 @@
     "typescript": "^5.9.3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
       "optional": true
     }
   },
@@ -40,5 +64,8 @@
     "README.md",
     "LICENSE",
     "logo.jpg"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }
