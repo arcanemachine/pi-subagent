@@ -4,165 +4,174 @@
   <img src="https://raw.githubusercontent.com/arcanemachine/pi-subagent/main/logo.jpg" alt="pi-subagent logo" width="250" />
 </p>
 
-A pi extension that enables spawning sub-agents via RPC for parallel task execution.
+A [Pi](https://pi.dev) extension for delegating work to configurable sub-agents.
 
-## Features
+Give each sub-agent its own model, thinking level, instructions, and time budget. Pi can launch several at once, continue other work while they run, and receive each result automatically. A live fleet window lets you inspect, steer, stop, and review them without leaving the session.
 
-- Spawn pi sub-agents as separate processes via RPC
-- Fire-and-forget sub-agents with automatic completion messages
-- Manage multiple concurrent sub-agents
-- Track status and output of running sub-agents
-- Interactive live window for inspecting and steering sub-agents
-- Automatic child-process cleanup after completion, session shutdown, and `/new`
-- Bounded in-memory activity history for long-running sub-agents
+> Like this extension? See [my other Pi extensions](https://github.com/arcanemachine/pi-projects).
+
+## Requirements
+
+- Pi 0.84.1 or later
+- At least one model configured in Pi for use by a sub-agent
+- Node.js 22.19.0 or later for package development
 
 ## Installation
 
-### From GitHub (Recommended)
+From npm:
+
+```bash
+pi install npm:@arcanemachine/pi-subagent
+```
+
+From GitHub:
 
 ```bash
 pi install git:github.com/arcanemachine/pi-subagent
 ```
 
-To update to the latest version:
+For local development:
 
 ```bash
-pi update git:github.com/arcanemachine/pi-subagent
+pi -e ./src/index.ts
 ```
 
-### From Local Clone
+Restart Pi after installation, or use `/reload` in an existing session.
 
-```bash
-git clone https://github.com/arcanemachine/pi-subagent.git
-cd pi-subagent
-pi install /path/to/pi-subagent
-```
+## Quick start
 
-No local `npm install` is required for normal usage.
-
-Or use a symlink for development:
-
-```bash
-ln -s /path/to/pi-subagent/src ~/.pi/agent/extensions/pi-subagent
-```
-
-## Usage
-
-### Commands
-
-- `/subagent` - Open the interactive live sub-agent window
-- `/subagent spawn:<agent> <task>` - Spawn a new sub-agent using configured agent type
-- `/subagent fleet` - Open the interactive live sub-agent window
-- `/subagent steer <id|all> <text>` - Send follow-up guidance to one or every running sub-agent
-- `/subagent kill <id>` - Kill a specific sub-agent
-- `/subagent killall` - Kill all sub-agents
-
-### Tools
-
-- `subagent_spawn` - Spawn a single sub-agent and return immediately (required `agent`)
-- `subagent_status` - Get structured current status (`agent_id` optional)
-- `subagent_steer` - Send follow-up guidance to one running sub-agent or all of them
-- `subagent_kill` - Kill a specific sub-agent by ID
-- `subagent_list_types` - List configured agent types (name/model/thinking level/when_to_use)
-
-Child sub-agents receive a dedicated `subagent_complete` tool with one required `result` field. A successful call submits the complete deliverable and gracefully shuts down the child process; failed calls can be corrected and retried. If a child omits the tool, its final assistant response is used as a fallback so useful work is not discarded over formatting. Empty, errored, aborted, or truncated responses are reported as failures. Completed sub-agents are automatically removed from active tracking.
-
-If an extension reload interrupts an active child, the parent conversation receives an `interrupted` message without triggering a new turn. The intentional SIGTERM is identified as infrastructure lifecycle behavior rather than a task failure.
-
-#### Agent resolution behavior
-
-Sub-agent model selection is strict and uses configured agent types only:
-
-1. Command syntax: `/subagent spawn:<agent> <task>`
-2. Tool syntax: provide `agent` for each sub-agent task
-3. Resolve `agent` from `"pi-subagent".agents[agent].model`
-4. Resolve the child thinking level from `thinking_level` when configured, otherwise inherit the parent's current thinking level
-5. If `extra_context` is configured for that agent, it is prepended to the task prompt sent to the sub-agent
-6. If `fork` is configured for that agent, the child starts from that Pi session or snapshot
-
-There is no model or fork override parameter and no fallback to legacy `"pi-subagent".model`.
-
-### Configuration (`settings.json`)
-
-Use the main pi settings files:
-
-- Global: `~/.pi/agent/settings.json`
-- Project: `.pi/settings.json`
-
-Project settings are deep-merged with global settings; project values take precedence.
-
-Example (`thinking_level`, `extra_context`, `fork`, `max_active_subagents`, `default_timeout_seconds`, and `allow_nested_subagents` are optional):
+Define at least one agent type in Pi's global `~/.pi/agent/settings.json`:
 
 ```json
 {
   "pi-subagent": {
-    "max_active_subagents": 4,
-    "default_timeout_seconds": 600,
-    "allow_nested_subagents": false,
     "agents": {
-      "example1": {
-        "model": "provider/some-model",
-        "when_to_use": "For example task type 1"
-      },
-      "example2": {
-        "model": "provider/some-other-model",
+      "research": {
+        "model": "provider/model",
         "thinking_level": "high",
-        "when_to_use": "For example task type 2",
-        "extra_context": "Think carefully and prefer correctness over speed."
-      },
-      "example3": {
-        "model": "provider/yet-another-model",
-        "when_to_use": "For example task type 3",
-        "extra_context": "Focus on correctness, edge cases, and actionable fixes."
-      },
-      "snapshot_worker": {
-        "model": "provider/snapshot-model",
-        "fork": "~/.pi/agent/pi-session-snapshot/baseline.jsonl",
-        "when_to_use": "For tasks that need the baseline session context"
+        "when_to_use": "Research, source gathering, and focused investigation"
       }
     }
   }
 }
 ```
 
-Replace `example1`, `example2`, and `example3` with keys you actually configure. The tool descriptions use these same placeholder names so the model does not mistake them for built-in agent types.
+Replace `provider/model` with a model available in your Pi configuration, then reload Pi. You can delegate directly:
 
-`thinking_level` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. If omitted, the child inherits the parent's current effective thinking level at spawn time. Pi may clamp a requested level when the selected child model does not support it.
+```text
+/subagent spawn:research Compare these two libraries and report the tradeoffs
+```
 
-Project settings are deep-merged with global settings by property and agent key. Project-local settings are used only for trusted projects. `max_active_subagents` is an optional hard cap on concurrently running sub-agents; spawn requests above the configured cap are rejected (not queued). If omitted, concurrency is unlimited.
+The command returns immediately. When the sub-agent finishes, its result is delivered back into the parent conversation automatically.
 
-`default_timeout_seconds` controls an automatic timeout notification for each spawned sub-agent. When the timeout is reached, the parent sends guidance asking the sub-agent to report progress so far and finish up. The default is 180 seconds.
+You can also ask Pi to delegate work naturally, for example:
 
-`allow_nested_subagents` controls whether spawned sub-agents can use this extension's own sub-agent tools. Default is `false` (nested sub-agents disabled). Set to `true` only if you explicitly want recursive fan-out.
+> Use the research sub-agent to investigate this API while you continue reviewing the implementation.
 
-`fork` accepts the same path or session ID as Pi's native `--fork` option. Relative paths are resolved from the project working directory. Forked agents cannot use `--no-session`, so they create a persistent child session containing the configured source context. A snapshot created by `pi-session-snapshot` can be used directly as the JSONL source.
+Open the live fleet at any time with `/subagent`.
 
-### Interactive Window
+## Commands
 
-Use `/subagent fleet` to open a live window showing all running sub-agents as simplified mini Pi sessions. Select an agent with `↑`/`↓` or `j`/`k`, press `s` to enter guidance, and press Enter to steer it. Page Up/Page Down scroll the selected session; Escape closes the window.
+| Command                                              | Action                                  |
+| ---------------------------------------------------- | --------------------------------------- |
+| `/subagent`                                          | Open the live sub-agent fleet           |
+| `/subagent fleet`                                    | Open the same fleet window              |
+| `/subagent spawn:<agent> [timeout:<seconds>] <task>` | Start a configured sub-agent            |
+| `/subagent steer <id\|all> <guidance>`               | Redirect one or every running sub-agent |
+| `/subagent kill <id>`                                | Stop one running sub-agent              |
+| `/subagent killall`                                  | Stop every running sub-agent            |
 
-Press `x` to stop the selected running sub-agent or `X` to stop all running sub-agents. Stopped sessions remain in the fleet. Press `r` to remove the selected finished session or `R` to remove all finished sessions. Lifecycle actions require Enter, `Y`, or `y` to confirm; Escape cancels. Here, “running” includes starting and running statuses, while “finished” includes completed, errored, and stopped statuses.
+Agent names are exact configuration keys. A spawn request cannot override the configured model or session fork.
 
-The window refreshes automatically and reads from bounded activity buffers. Finished sessions remain individually selectable and use status icons; only the 20 most recent finished sessions are retained, without keeping their child processes alive.
+## Live fleet
 
-Each sub-agent reports its running context token usage alongside its elapsed time. The fleet roster shows `duration·tokens` on the right of each row (e.g. `02m30s·0.072Mt`, zero-padded), and the detail header shows the same token count next to status and duration. Used tokens update from every assistant reply's `usage` (`totalTokens`, falling back to `input + output + cacheRead + cacheWrite`) and are shown in millions (`Mt`) once the first reply arrives; until then the timer alone is shown. The `subagent_status` tool exposes the raw `contextTokens` and a preformatted `contextTokensDisplay` string.
+The fleet presents each sub-agent as a small, selectable Pi session. It shows the current activity, streamed response preview, elapsed time, context usage, and final result when available.
+
+| Key                     | Action                                       |
+| ----------------------- | -------------------------------------------- |
+| `↑` / `↓`, `j` / `k`    | Select a sub-agent                           |
+| `Page Up` / `Page Down` | Scroll the selected session                  |
+| `s`                     | Write guidance for the selected sub-agent    |
+| `x` / `X`               | Stop the selected sub-agent / all running    |
+| `r` / `R`               | Remove the selected result / all finished    |
+| `Escape`                | Cancel the current action or close the fleet |
+
+Stopping and removal require confirmation. Starting and running agents can be steered or stopped; completed, errored, and stopped agents can be removed. The fleet retains the 20 most recent finished sessions without keeping their child processes alive.
+
+## Agent tools
+
+These tools let Pi manage sub-agents from the conversation. You normally do not need to call them yourself.
+
+| Tool                  | Purpose                                                     |
+| --------------------- | ----------------------------------------------------------- |
+| `subagent_spawn`      | Start one configured sub-agent and return immediately       |
+| `subagent_list_types` | List configured agent types and their usage guidance        |
+| `subagent_steer`      | Send follow-up guidance to one running agent or all of them |
+| `subagent_status`     | Inspect structured live status when an update is needed     |
+| `subagent_kill`       | Stop one running sub-agent                                  |
+
+Sub-agents report completion automatically, so Pi does not need to poll `subagent_status` while waiting. Use status checks when you ask for an update or there is reason to suspect a stall.
+
+## Configuration
+
+The extension reads the `pi-subagent` namespace from Pi's normal settings files:
+
+- Global: `~/.pi/agent/settings.json`
+- Project: `<project>/.pi/settings.json`
+
+Trusted project settings are deep-merged over global settings, including individual agent properties. Project settings are ignored when the project is not trusted.
+
+### Agent types
+
+Each entry under `agents` defines one agent type:
+
+| Property         | Required | Description                                                             |
+| ---------------- | -------- | ----------------------------------------------------------------------- |
+| `model`          | Yes      | Exact `provider/model` used by the child                                |
+| `thinking_level` | No       | Child thinking level; inherits the parent's current level when omitted  |
+| `when_to_use`    | No       | Description shown by `subagent_list_types` and spawn command completion |
+| `extra_context`  | No       | Additional instructions prepended to every task for this agent type     |
+| `fork`           | No       | Pi session ID or snapshot path used as the child's starting context     |
+
+Supported thinking levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Pi may clamp a level that the selected model does not support.
+
+A configured `fork` follows Pi's native `--fork` behavior. Relative paths are resolved from the project working directory. Forked agents create persistent child sessions; ordinary agents do not. Snapshots created by [`pi-session-snapshot`](https://github.com/arcanemachine/pi-session-snapshot) can be used as fork sources.
+
+### Runtime controls
+
+| Setting                   | Default   | Behavior                                                                 |
+| ------------------------- | --------- | ------------------------------------------------------------------------ |
+| `max_active_subagents`    | Unlimited | Reject new spawns after the configured concurrency limit is reached      |
+| `default_timeout_seconds` | `180`     | Give each child a default time budget and ask it to wrap up when reached |
+| `allow_nested_subagents`  | `false`   | Allow spawned children to use this extension's own sub-agent tools       |
+
+`max_active_subagents` accepts positive integers up to 100. Requests above the limit are rejected rather than queued.
+
+`default_timeout_seconds` is a finishing budget, not a hard process kill. The extension warns the child as the deadline approaches and asks it to submit its best available result when time expires. Use `subagent_kill` when a child must be stopped immediately. A spawn can override the budget with `timeout_seconds` in the tool or `timeout:<seconds>` in the command.
+
+Nested sub-agents are disabled by default to prevent unplanned recursive fan-out. Enable them only when you explicitly want children to delegate further work.
+
+## Completion and lifecycle
+
+Each child receives the child-only `subagent_complete` tool for returning its final deliverable. If it finishes with an ordinary final response instead, that response is used as a fallback. Empty, errored, aborted, or truncated responses are reported as failures rather than silently treated as complete.
+
+Finished children leave active status automatically and remain available in the recent fleet history. Starting a new parent session stops the current children. Reloading the extension also stops them, but records an interruption message in the parent conversation so unfinished work is not mistaken for a task failure.
+
+Activity and response previews are kept in bounded memory. Each sub-agent runs as a separate Pi child process; configured forks preserve the source session context, while ordinary tasks do not create persistent sessions.
 
 ## Development
 
-For local development and verification:
-
 ```bash
-npm install
+npm install --ignore-scripts --workspaces=false
+npm run format:check
 npm run typecheck
+npm run test
 npm run build
-npm run format
+npm pack --dry-run
 ```
 
-To run directly in pi:
+Pi loads the TypeScript entrypoint directly from `src/index.ts`; no compiled runtime artifact is required.
 
-```bash
-cd /path/to/pi-subagent
-pi -e ./src/index.ts
-```
+## License
 
-See AGENTS.md for agent-specific information.
+MIT
