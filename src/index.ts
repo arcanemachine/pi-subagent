@@ -1292,12 +1292,17 @@ function describeSteerFailure(reason: SteerDelivery["reason"]): string {
   return "not found";
 }
 
-function formatSteerAllSummary(summary: SteerAllSummary): string {
+function formatSteerAllSummary(
+  summary: SteerAllSummary,
+  text?: string,
+): string {
   if (summary.targeted === 0) return "No running sub-agents to steer.";
 
+  const guidance = text?.trim();
   const header =
     `Sent guidance to ${summary.sent}/${summary.targeted} running sub-agent` +
-    `${summary.targeted === 1 ? "" : "s"}.`;
+    `${summary.targeted === 1 ? "" : "s"}` +
+    (guidance ? `: ${guidance}` : ".");
   const deliveries = summary.deliveries.map((delivery) =>
     delivery.sent
       ? `✓ ${delivery.agentId}: sent`
@@ -1569,6 +1574,111 @@ type SubagentCompleteDetails = {
 type SubagentSpawnedDetails = SubagentSpawnPresentation & {
   thinkingLevel?: ThinkingLevel;
 };
+
+type SubagentSteerDetails = {
+  all?: boolean;
+  agentId?: string;
+  message?: string;
+  guidance?: string;
+  targeted?: number;
+  sent?: number | boolean;
+  failed?: number;
+  deliveries?: SteerDelivery[];
+  reason?: SteerDelivery["reason"];
+};
+
+function getSubagentSteerGuidance(
+  details: SubagentSteerDetails | undefined,
+): string {
+  return (details?.guidance ?? details?.message ?? "").trim();
+}
+
+function formatSubagentSteerHeader(
+  details: SubagentSteerDetails | undefined,
+): string {
+  const guidance = getSubagentSteerGuidance(details);
+  if (
+    details?.all &&
+    details.targeted !== undefined &&
+    typeof details.sent === "number"
+  ) {
+    const header =
+      `Sent guidance to ${details.sent}/${details.targeted} running sub-agent` +
+      `${details.targeted === 1 ? "" : "s"}`;
+    return header + (guidance ? `: ${guidance}` : ".");
+  }
+
+  if (details?.sent === false && details.agentId) {
+    const reason = describeSteerFailure(details.reason);
+    return `Failed to send guidance to sub-agent ${details.agentId}: ${reason}`;
+  }
+
+  if (details?.agentId) {
+    return `Sent guidance to sub-agent ${details.agentId}: ${guidance}`;
+  }
+
+  return guidance ? `Sent guidance: ${guidance}` : "Guidance sent.";
+}
+
+function getSubagentSteerText(result: AgentToolResult<unknown>): string {
+  return getSubagentSpawnText(result.content as MessageContent);
+}
+
+function renderCompactSubagentSteer(
+  details: SubagentSteerDetails | undefined,
+  theme: Theme,
+  isError: boolean,
+): Component {
+  const guidance = getSubagentSteerGuidance(details).replace(/[\r\n]+/g, " ");
+  const count =
+    details?.targeted !== undefined && typeof details.sent === "number"
+      ? ` (${details.sent}/${details.targeted})`
+      : "";
+  const status = isError
+    ? ` 🤖 Guidance failed${guidance ? `: ${guidance}` : ""}`
+    : ` 🤖 Sent guidance${count}${guidance ? `: ${guidance}` : ""}`;
+  const text =
+    theme.fg("toolTitle", theme.bold("subagent_steer")) +
+    theme.fg(isError ? "error" : "toolOutput", status);
+
+  return {
+    render(width: number): string[] {
+      return [truncateToWidth(text, width, "...")];
+    },
+    invalidate() {},
+  };
+}
+
+function renderExpandedSubagentSteer(
+  result: AgentToolResult<unknown>,
+  details: SubagentSteerDetails | undefined,
+  theme: Theme,
+  isError: boolean,
+): Component {
+  const content = getSubagentSteerText(result);
+  const header = formatSubagentSteerHeader(details);
+  const body = content.startsWith(header)
+    ? content.slice(header.length).replace(/^\n+/, "")
+    : content;
+  const text = body ? `${header}\n\n${body}` : header;
+  return new Text(
+    `\n${theme.fg(isError ? "error" : "toolOutput", text)}`,
+    0,
+    0,
+  );
+}
+
+function renderSubagentSteerResult(
+  result: AgentToolResult<unknown>,
+  expanded: boolean,
+  theme: Theme,
+  isError: boolean,
+): Component {
+  const details = result.details as SubagentSteerDetails | undefined;
+  return expanded
+    ? renderExpandedSubagentSteer(result, details, theme, isError)
+    : renderCompactSubagentSteer(details, theme, isError);
+}
 
 function getCompletionStatus(
   details: SubagentCompleteDetails | undefined,
@@ -2206,6 +2316,25 @@ export default function (pi: ExtensionAPI) {
       },
       required: ["agent_id", "text"],
     } as any,
+    renderCall(_args, theme, context) {
+      if (!context.expanded) return new Text("", 0, 0);
+      return new Text(
+        theme.fg("toolTitle", theme.bold("subagent_steer")),
+        0,
+        0,
+      );
+    },
+    renderResult(result, { expanded, isPartial }, theme, context) {
+      if (isPartial) {
+        return new Text(theme.fg("muted", "🤖 Steering..."), 0, 0);
+      }
+      return renderSubagentSteerResult(
+        result,
+        expanded,
+        theme,
+        context.isError,
+      );
+    },
     async execute(
       toolCallId,
       params: { agent_id: string; text: string },
@@ -2219,13 +2348,14 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: formatSteerAllSummary(summary),
+              text: formatSteerAllSummary(summary, params.text),
             },
           ],
           isError: summary.targeted === 0 || summary.sent === 0,
           details: {
             all: true,
             ...summary,
+            guidance: params.text.trim(),
           },
         };
       }
@@ -2254,6 +2384,7 @@ export default function (pi: ExtensionAPI) {
             sent: false,
             reason: result.reason,
             agentId: params.agent_id,
+            guidance: params.text.trim(),
           },
         };
       }
@@ -2264,15 +2395,14 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text:
-              `Sent guidance to sub-agent ${params.agent_id}\n` +
-              `Message: ${sentText}`,
+            text: `Sent guidance to sub-agent ${params.agent_id}: ${sentText}`,
           },
         ],
         details: {
           sent: true,
           agentId: params.agent_id,
           message: sentText,
+          guidance: sentText,
         },
       };
     },

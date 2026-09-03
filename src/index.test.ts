@@ -879,6 +879,11 @@ test("registers the supported command surface and steers all agents", async () =
   __test.resetState();
   const tools: any[] = [];
   const commands: any[] = [];
+  const renderTheme = {
+    fg: (_color: string, text: string) => text,
+    bg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as never;
   extension({
     registerTool: (tool: any) => tools.push(tool),
     registerCommand: (name: string, command: any) =>
@@ -939,6 +944,10 @@ test("registers the supported command surface and steers all agents", async () =
     undefined,
   );
   assert.equal(result.details.sent, true);
+  assert.equal(
+    result.content[0].text,
+    "Sent guidance to sub-agent T-steer: Focus on the requested scope",
+  );
   assert.ok(
     agent.activity.some((entry) =>
       entry.includes("Parent guidance: Focus on the requested scope"),
@@ -969,6 +978,56 @@ test("registers the supported command surface and steers all agents", async () =
     secondAgent.activity.some((entry) =>
       entry.includes("Parent guidance: Stop expanding scope"),
     ),
+  );
+
+  const compactSteer = steerTool.renderResult(
+    allResult,
+    { expanded: false, isPartial: false },
+    renderTheme,
+    { isError: false },
+  );
+  const compactSteerLines = compactSteer.render(120);
+  assert.equal(compactSteerLines.length, 1);
+  assert.equal(
+    compactSteerLines[0],
+    "subagent_steer 🤖 Sent guidance (2/3): Stop expanding scope",
+  );
+  const narrowSteer = compactSteer.render(45)[0] ?? "";
+  assert.ok(visibleWidth(narrowSteer) <= 45);
+  assert.ok(narrowSteer.replace(/\x1b\[[0-9;]*m/g, "").endsWith("..."));
+
+  const expandedSteer = steerTool.renderResult(
+    allResult,
+    { expanded: true, isPartial: false },
+    renderTheme,
+    { isError: false },
+  );
+  assert.deepEqual(
+    expandedSteer.render(120).map((line: string) => line.trimEnd()),
+    [
+      "",
+      "Sent guidance to 2/3 running sub-agents: Stop expanding scope",
+      "",
+      "✓ T-steer: sent",
+      "✓ T-steer-all: sent",
+      "✗ T-steer-unavailable: cannot receive guidance",
+    ],
+  );
+  const compactCall = steerTool.renderCall(
+    { agent_id: "all", text: "Stop expanding scope" },
+    renderTheme,
+    { expanded: false } as never,
+  );
+  assert.deepEqual(compactCall.render(120), []);
+  const partialSteer = steerTool.renderResult(
+    allResult,
+    { expanded: false, isPartial: true },
+    renderTheme,
+    { isError: false },
+  );
+  assert.deepEqual(
+    partialSteer.render(120).map((line: string) => line.trimEnd()),
+    ["🤖 Steering..."],
   );
 
   const notifications: Array<{ message: string; level: string }> = [];
