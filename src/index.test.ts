@@ -89,6 +89,8 @@ test("deep merges global and trusted project sub-agent settings", () => {
       max_active_subagents: 5,
       default_timeout_seconds: undefined,
       allow_nested_subagents: false,
+      hide_default_subagent_footer: false,
+      has_agent_configuration: true,
       agents: {
         global: {
           model: "provider/global",
@@ -353,6 +355,262 @@ test("spawns configured fork sessions from the project cwd", async () => {
     assert.equal(spawnCalls[0]?.options?.cwd, cwd);
   } finally {
     __test.resetState();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("uses the current model for the built-in default sub-agent", async () => {
+  __test.resetState();
+  const agentDir = createAgentSettingsDir({});
+  const cwd = createProjectSettings({});
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const spawnCalls: Array<{ args: string[] }> = [];
+  const fakeProcess = {
+    kill() {},
+    on() {
+      return this;
+    },
+    stdin: {
+      destroyed: false,
+      write() {},
+      end() {},
+    },
+  } as unknown as ChildProcess;
+  const tools: any[] = [];
+  const commands: any[] = [];
+
+  __test.setSpawnProcess(((command: string, args: string[]) => {
+    assert.equal(command, "pi");
+    spawnCalls.push({ args });
+    return fakeProcess;
+  }) as never);
+
+  try {
+    extension({
+      registerTool: (tool: any) => tools.push(tool),
+      registerCommand: (name: string, command: any) =>
+        commands.push({ name, command }),
+      registerMessageRenderer() {},
+      on() {},
+      sendMessage() {},
+      getThinkingLevel: () => "high",
+    } as any);
+
+    const spawnTool = tools.find((tool) => tool.name === "subagent_spawn");
+    assert.ok(spawnTool);
+    const completions = commands
+      .find((entry) => entry.name === "subagent")
+      .command.getArgumentCompletions("");
+    assert.ok(
+      completions.some((entry: any) => entry.value === "spawn:default"),
+    );
+
+    const result = await spawnTool.execute(
+      "call-default",
+      { task: "use the current session", agent: "default" },
+      undefined,
+      undefined,
+      {
+        cwd,
+        isProjectTrusted: () => true,
+        model: { provider: "provider/current", id: "model/current" },
+      },
+    );
+
+    assert.deepEqual(spawnCalls[0]?.args.slice(-4), [
+      "--model",
+      "provider/current/model/current",
+      "--thinking",
+      "high",
+    ]);
+    assert.equal(result.details.defaultSubagent, true);
+    assert.equal(result.details.showDefaultSubagentFooter, true);
+    assert.ok(
+      !result.content[0].text.includes("You're using the default sub-agent."),
+    );
+  } finally {
+    __test.resetState();
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("keeps the default sub-agent disabled for broken configuration", async () => {
+  __test.resetState();
+  const agentDir = createAgentSettingsDir({});
+  const cwd = createProjectSettings({ broken: { thinking_level: "high" } });
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const tools: any[] = [];
+
+  try {
+    extension({
+      registerTool: (tool: any) => tools.push(tool),
+      registerCommand() {},
+      registerMessageRenderer() {},
+      on() {},
+    } as any);
+    const spawnTool = tools.find((tool) => tool.name === "subagent_spawn");
+    assert.ok(spawnTool);
+    await assert.rejects(
+      () =>
+        spawnTool.execute(
+          "call-broken-default",
+          { task: "should fail", agent: "default" },
+          undefined,
+          undefined,
+          {
+            cwd,
+            model: { provider: "provider/current", id: "model/current" },
+          },
+        ),
+      /Unknown sub-agent type `default`/,
+    );
+  } finally {
+    __test.resetState();
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("renders the default footer only for user-facing spawn output", async () => {
+  __test.resetState();
+  const agentDir = createAgentSettingsDir({});
+  const cwd = createProjectSettings({});
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const tools: any[] = [];
+  const fakeProcess = {
+    kill() {},
+    on() {
+      return this;
+    },
+    stdin: {
+      destroyed: false,
+      write() {},
+      end() {},
+    },
+  } as unknown as ChildProcess;
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as never;
+  __test.setSpawnProcess((() => fakeProcess) as never);
+
+  try {
+    extension({
+      registerTool: (tool: any) => tools.push(tool),
+      registerCommand() {},
+      registerMessageRenderer() {},
+      on() {},
+      getThinkingLevel: () => "medium",
+    } as any);
+    const spawnTool = tools.find((tool) => tool.name === "subagent_spawn");
+    assert.ok(spawnTool);
+    const result = await spawnTool.execute(
+      "call-default-footer",
+      { task: "show the footer", agent: "default" },
+      undefined,
+      undefined,
+      {
+        cwd,
+        model: { provider: "provider/current", id: "model/current" },
+      },
+    );
+
+    const compact = spawnTool.renderResult(
+      result,
+      { expanded: false, isPartial: false },
+      theme,
+      { isError: false },
+    );
+    const compactText = compact.render(120).join("\n");
+    assert.ok(compactText.includes("You're using the default sub-agent."));
+    assert.ok(
+      compactText.includes(
+        "To set up custom sub-agents, see https://github.com/arcanemachine/pi-subagent#quick-start",
+      ),
+    );
+
+    const expanded = spawnTool.renderResult(
+      result,
+      { expanded: true, isPartial: false },
+      theme,
+      { isError: false },
+    );
+    const expandedText = expanded.render(120).join("\n");
+    assert.ok(expandedText.includes("You're using the default sub-agent."));
+    assert.ok(!result.content[0].text.includes("To set up custom sub-agents"));
+  } finally {
+    __test.resetState();
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("hides the default footer when configured", async () => {
+  __test.resetState();
+  const agentDir = createAgentSettingsDir({});
+  const cwd = createProjectSettings({});
+  writeFileSync(
+    join(cwd, ".pi", "settings.json"),
+    JSON.stringify({
+      "pi-subagent": {
+        agents: {},
+        hide_default_subagent_footer: true,
+      },
+    }),
+  );
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const tools: any[] = [];
+  const fakeProcess = {
+    kill() {},
+    on() {
+      return this;
+    },
+    stdin: {
+      destroyed: false,
+      write() {},
+      end() {},
+    },
+  } as unknown as ChildProcess;
+  __test.setSpawnProcess((() => fakeProcess) as never);
+
+  try {
+    extension({
+      registerTool: (tool: any) => tools.push(tool),
+      registerCommand() {},
+      registerMessageRenderer() {},
+      on() {},
+      getThinkingLevel: () => "medium",
+    } as any);
+    const spawnTool = tools.find((tool) => tool.name === "subagent_spawn");
+    assert.ok(spawnTool);
+    const result = await spawnTool.execute(
+      "call-hidden-footer",
+      { task: "hide the footer", agent: "default" },
+      undefined,
+      undefined,
+      {
+        cwd,
+        model: { provider: "provider/current", id: "model/current" },
+      },
+    );
+    assert.equal(result.details.showDefaultSubagentFooter, false);
+  } finally {
+    __test.resetState();
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
   }
 });

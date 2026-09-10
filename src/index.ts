@@ -88,6 +88,8 @@ interface SubAgent {
   receivedEvent: boolean;
   timeoutSeconds?: number;
   timeoutAt?: number;
+  isDefaultSubagent?: boolean;
+  showDefaultSubagentFooter?: boolean;
   timeoutNotified?: boolean;
   timeoutWarningHandle?: NodeJS.Timeout;
   timeoutHandle?: NodeJS.Timeout;
@@ -102,6 +104,8 @@ const recentFleetAgents = new Map<string, FleetAgentDetail>();
 let currentCtx: ExtensionContext | null = null;
 let nextAgentId = 1;
 let configuredAgents: Record<string, SubagentProfile> = {};
+let hasAgentConfiguration = false;
+let hideDefaultSubagentFooter = false;
 let maxActiveSubagents: number | undefined = undefined;
 let defaultTimeoutSeconds: number | undefined = 180;
 let allowNestedSubagents = false;
@@ -136,6 +140,8 @@ type PiSubagentSettings = {
   max_active_subagents?: number;
   default_timeout_seconds?: number;
   allow_nested_subagents?: boolean;
+  hide_default_subagent_footer?: boolean;
+  has_agent_configuration: boolean;
 };
 
 const STALE_RUNNING_MS = 60_000;
@@ -216,6 +222,11 @@ function normalizeManualTimeoutSeconds(raw: unknown): number | undefined {
 }
 
 function normalizeAllowNestedSubagents(raw: unknown): boolean | undefined {
+  if (typeof raw !== "boolean") return undefined;
+  return raw;
+}
+
+function normalizeHideDefaultSubagentFooter(raw: unknown): boolean | undefined {
   if (typeof raw !== "boolean") return undefined;
   return raw;
 }
@@ -321,6 +332,13 @@ function getPiSubagentSettings(
     allow_nested_subagents:
       normalizeAllowNestedSubagents(mergedSubagent.allow_nested_subagents) ??
       false,
+    hide_default_subagent_footer:
+      normalizeHideDefaultSubagentFooter(
+        mergedSubagent.hide_default_subagent_footer,
+      ) ?? false,
+    has_agent_configuration:
+      mergedAgentsValue !== undefined &&
+      (!isRecord(mergedAgentsValue) || Object.keys(mergedAgents).length > 0),
   };
 }
 
@@ -337,15 +355,29 @@ function projectSettingsAreTrusted(
 function refreshConfiguredAgents(cwd: string, projectTrusted = true): void {
   const settings = getPiSubagentSettings(cwd, projectTrusted);
   configuredAgents = settings.agents || {};
+  hasAgentConfiguration = settings.has_agent_configuration;
+  hideDefaultSubagentFooter = settings.hide_default_subagent_footer ?? false;
   maxActiveSubagents = settings.max_active_subagents;
   defaultTimeoutSeconds = settings.default_timeout_seconds ?? 180;
   allowNestedSubagents = settings.allow_nested_subagents ?? false;
 }
 
+type ResolvedSubagentProfile = {
+  profile: SubagentProfile;
+  defaultSubagent: boolean;
+};
+
+function getCurrentModelReference(
+  ctx: ExtensionContext | null | undefined,
+): string | undefined {
+  const model = ctx?.model;
+  return model ? `${model.provider}/${model.id}` : undefined;
+}
+
 function resolveSubagentProfile(
   agentName: string,
   ctx: ExtensionContext | null | undefined,
-): SubagentProfile {
+): ResolvedSubagentProfile {
   const normalizedAgentName = agentName.trim();
   if (!normalizedAgentName) {
     throw new Error("Missing agent type");
@@ -356,13 +388,27 @@ function resolveSubagentProfile(
     projectSettingsAreTrusted(ctx),
   );
   const profile = configuredAgents[normalizedAgentName];
-  if (profile) return profile;
+  if (profile) return { profile, defaultSubagent: false };
 
-  const availableAgents = Object.keys(configuredAgents);
+  if (normalizedAgentName === "default" && !hasAgentConfiguration) {
+    const model = getCurrentModelReference(ctx);
+    if (!model) {
+      throw new Error(
+        "The default sub-agent needs an active model. Select a model before spawning.",
+      );
+    }
+    return { profile: { model }, defaultSubagent: true };
+  }
+
+  const availableAgents = hasAgentConfiguration
+    ? Object.keys(configuredAgents)
+    : ["default"];
   const suffix =
     availableAgents.length > 0
       ? ` Available agents: ${availableAgents.join(", ")}`
-      : " No agents configured in settings.";
+      : hasAgentConfiguration
+        ? " No valid agents are configured in settings."
+        : " No agents configured in settings.";
 
   throw new Error(
     `Unknown sub-agent type \`${normalizedAgentName}\`.${suffix}`,
@@ -376,6 +422,19 @@ function getConfiguredAgentEntries(
     ctx?.cwd ?? process.cwd(),
     projectSettingsAreTrusted(ctx),
   );
+
+  if (!hasAgentConfiguration) {
+    return [
+      {
+        name: "default",
+        profile: {
+          model: getCurrentModelReference(ctx) ?? "current model",
+          when_to_use: "Uses the current model and thinking level",
+        },
+      },
+    ];
+  }
+
   return Object.entries(configuredAgents)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, profile]) => ({ name, profile }));
@@ -923,6 +982,8 @@ function spawnSubAgent(
   timeoutSecondsOverride?: number,
   fork?: string,
   cwd = process.cwd(),
+  isDefaultSubagent = false,
+  showDefaultSubagentFooter = false,
 ): SubAgent {
   const id = String(nextAgentId++);
 
@@ -952,6 +1013,8 @@ function spawnSubAgent(
     model,
     thinkingLevel,
     extraContext,
+    isDefaultSubagent,
+    showDefaultSubagentFooter,
     status: "starting",
     activity: [],
     currentResponsePreview: "",
@@ -1408,6 +1471,8 @@ type SubagentSpawnPresentation = {
   task?: string;
   taskTitle?: string;
   timeoutSeconds?: number;
+  defaultSubagent?: boolean;
+  showDefaultSubagentFooter?: boolean;
 };
 
 function buildSubagentSpawnDetails(agent: SubAgent): SubagentSpawnPresentation {
@@ -1417,11 +1482,25 @@ function buildSubagentSpawnDetails(agent: SubAgent): SubagentSpawnPresentation {
     task: agent.task,
     taskTitle: agent.taskTitle,
     timeoutSeconds: agent.timeoutSeconds,
+    defaultSubagent: agent.isDefaultSubagent,
+    showDefaultSubagentFooter: agent.showDefaultSubagentFooter,
   };
 }
 
 function formatSubagentTimeout(timeoutSeconds?: number): string {
   return timeoutSeconds ? `${timeoutSeconds}s` : "(none)";
+}
+
+const DEFAULT_SUBAGENT_FOOTER =
+  "You're using the default sub-agent.\n\n" +
+  "To set up custom sub-agents, see https://github.com/arcanemachine/pi-subagent#quick-start";
+
+function getDefaultSubagentFooter(
+  details: SubagentSpawnPresentation,
+): string | undefined {
+  return details.defaultSubagent && details.showDefaultSubagentFooter
+    ? DEFAULT_SUBAGENT_FOOTER
+    : undefined;
 }
 
 function formatSubagentSpawnMessage(agent: SubAgent): string {
@@ -1463,7 +1542,19 @@ function renderCompactSubagentSpawn(
 
   return {
     render(width: number): string[] {
-      return [truncateToWidth(text, width, "...")];
+      const lines = [truncateToWidth(text, width, "...")];
+      const footer = getDefaultSubagentFooter(details);
+      if (footer) {
+        lines.push(
+          "",
+          ...footer
+            .split("\n")
+            .map((line) =>
+              truncateToWidth(theme.fg("muted", line), width, "..."),
+            ),
+        );
+      }
+      return lines;
     },
     invalidate() {},
   };
@@ -1508,6 +1599,11 @@ function renderExpandedSubagentSpawn(
       color: (text: string) => theme.fg(textColor, text),
     }),
   );
+  const footer = getDefaultSubagentFooter(details);
+  if (footer) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("muted", footer), 0, 0));
+  }
   return container;
 }
 
@@ -1889,8 +1985,8 @@ export default function (pi: ExtensionAPI) {
         },
       ];
 
-      const spawnItems = Object.entries(configuredAgents).map(
-        ([agentType, profile]) => ({
+      const spawnItems = getConfiguredAgentEntries(currentCtx).map(
+        ({ name: agentType, profile }) => ({
           value: `spawn:${agentType}`,
           label:
             `spawn:${agentType} <task> — ` +
@@ -1952,7 +2048,8 @@ export default function (pi: ExtensionAPI) {
             return;
           }
 
-          const profile = resolveSubagentProfile(agentType, ctx);
+          const resolved = resolveSubagentProfile(agentType, ctx);
+          const profile = resolved.profile;
           const thinkingLevel = resolveThinkingLevel(
             profile,
             pi.getThinkingLevel(),
@@ -1966,6 +2063,8 @@ export default function (pi: ExtensionAPI) {
             manualTimeoutSeconds,
             profile.fork,
             ctx.cwd,
+            resolved.defaultSubagent,
+            resolved.defaultSubagent && !hideDefaultSubagentFooter,
           );
           ctx.ui.notify(`Spawned sub-agent ${agent.id}`, "info");
 
@@ -2096,7 +2195,7 @@ export default function (pi: ExtensionAPI) {
     name: "subagent_spawn",
     label: "Spawn Sub-Agent",
     description:
-      "Spawn a configured sub-agent to work in parallel; returns immediately.",
+      "Spawn a sub-agent to work in parallel. Use `default` when no custom agent types are configured; it uses the current model and thinking level.",
     promptGuidelines: [
       "Sub-agents complete asynchronously and notify automatically; never poll for progress or completion by any means, including status checks, sleep commands, or wait loops.",
     ],
@@ -2110,7 +2209,8 @@ export default function (pi: ExtensionAPI) {
         },
         agent: {
           type: "string",
-          description: "Configured key from `pi-subagent.agents`.",
+          description:
+            "Agent type name. Use `default` when no custom agent types are configured.",
         },
         timeout_seconds: {
           type: "number",
@@ -2162,7 +2262,8 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      const profile = resolveSubagentProfile(params.agent, ctx);
+      const resolved = resolveSubagentProfile(params.agent, ctx);
+      const profile = resolved.profile;
       const thinkingLevel = resolveThinkingLevel(
         profile,
         pi.getThinkingLevel(),
@@ -2176,6 +2277,8 @@ export default function (pi: ExtensionAPI) {
         manualTimeoutSeconds,
         profile.fork,
         ctx.cwd,
+        resolved.defaultSubagent,
+        resolved.defaultSubagent && !hideDefaultSubagentFooter,
       );
 
       return {
@@ -2493,7 +2596,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: "No sub-agent types are configured. Add `pi-subagent.agents` in settings.",
+              text: "No valid sub-agent types are configured. Check `pi-subagent.agents` in settings.",
             },
           ],
           isError: true,
@@ -2511,7 +2614,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `Configured sub-agent types:\n${lines.join("\n")}`,
+            text: `Available sub-agent types:\n${lines.join("\n")}`,
           },
         ],
         details: {
@@ -2577,6 +2680,8 @@ export const __test = {
     recentFleetAgents.clear();
     nextAgentId = 1;
     configuredAgents = {};
+    hasAgentConfiguration = false;
+    hideDefaultSubagentFooter = false;
     maxActiveSubagents = undefined;
     defaultTimeoutSeconds = 180;
     allowNestedSubagents = false;

@@ -13,7 +13,7 @@ Give each sub-agent its own model, thinking level, instructions, and time budget
 ## Requirements
 
 - Pi 0.84.1 or later
-- At least one model configured in Pi for use by a sub-agent
+- A model configured in Pi
 - Node.js 22.19.0 or later for package development
 
 ## Installation
@@ -40,7 +40,17 @@ Restart Pi after installation, or use `/reload` in an existing session.
 
 ## Quick start
 
-Define at least one agent type in Pi's global `~/.pi/agent/settings.json`:
+pi-subagent works without a sub-agent configuration. When `pi-subagent.agents` is missing or empty, use the built-in `default` type:
+
+```text
+/subagent spawn:default Review these changes and report any problems
+```
+
+The default sub-agent uses the model and thinking level active in the current Pi session. Run `/subagent` to view, steer, stop, and review active sub-agents.
+
+The default type is available only when no custom agent types are configured. Once you add custom types, use their names instead.
+
+For different models, instructions, or session forks, define one or more custom agent types in Pi's global `~/.pi/agent/settings.json`:
 
 ```json
 {
@@ -56,19 +66,11 @@ Define at least one agent type in Pi's global `~/.pi/agent/settings.json`:
 }
 ```
 
-Replace `provider/model` with a model available in your Pi configuration, then reload Pi. You can delegate directly:
-
-```text
-/subagent spawn:research Compare these two libraries and report the tradeoffs
-```
-
-The command returns immediately. When the sub-agent finishes, its result is delivered back into the parent conversation automatically.
+Replace `provider/model` with a model available in your Pi configuration, then reload Pi. The command returns immediately. When the sub-agent finishes, its result is delivered back into the parent conversation automatically.
 
 You can also ask Pi to delegate work naturally, for example:
 
 > Use the research sub-agent to investigate this API while you continue reviewing the implementation.
-
-Open the live fleet at any time with `/subagent`.
 
 ## Commands
 
@@ -139,13 +141,16 @@ A configured `fork` follows Pi's native `--fork` behavior. Relative paths are re
 
 ### Runtime controls
 
-| Setting                   | Default   | Behavior                                                                 |
-| ------------------------- | --------- | ------------------------------------------------------------------------ |
-| `max_active_subagents`    | Unlimited | Reject new spawns after the configured concurrency limit is reached      |
-| `default_timeout_seconds` | `180`     | Give each child a default time budget and ask it to wrap up when reached |
-| `allow_nested_subagents`  | `false`   | Allow spawned children to use this extension's own sub-agent tools       |
+| Setting                        | Default   | Behavior                                                                 |
+| ------------------------------ | --------- | ------------------------------------------------------------------------ |
+| `max_active_subagents`         | Unlimited | Reject new spawns after the configured concurrency limit is reached      |
+| `default_timeout_seconds`      | `180`     | Give each child a default time budget and ask it to wrap up when reached |
+| `allow_nested_subagents`       | `false`   | Allow spawned children to use this extension's own sub-agent tools       |
+| `hide_default_subagent_footer` | `false`   | Hide the reminder shown below default-agent spawn messages               |
 
 `max_active_subagents` accepts positive integers up to 100. Requests above the limit are rejected rather than queued.
+
+When the built-in `default` type is active, spawn messages show a short reminder about custom configuration. Set `hide_default_subagent_footer` to `true` to hide it. The reminder is shown only in the user-facing spawn display, not in the tool result sent to the model.
 
 `default_timeout_seconds` is a finishing budget, not a hard process kill. The extension warns the child as the deadline approaches and asks it to submit its best available result when time expires. Use `subagent_kill` when a child must be stopped immediately. A spawn can override the budget with `timeout_seconds` in the tool or `timeout:<seconds>` in the command.
 
