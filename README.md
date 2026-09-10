@@ -59,7 +59,8 @@ For different models, instructions, or session forks, define one or more custom 
       "research": {
         "model": "provider/model",
         "thinking_level": "high",
-        "when_to_use": "Research, source gathering, and focused investigation"
+        "when_to_use": "Research, source gathering, and focused investigation",
+        "extra_context": "Stay focused on your work. Do not expand scope."
       }
     }
   }
